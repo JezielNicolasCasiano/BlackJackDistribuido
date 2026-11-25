@@ -1,0 +1,6 @@
+# Todo el sistema vive en su propio namespace (diseño, sección 8.1):
+# se puede crear y borrar completo sin afectar otra cosa del clúster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: blackjack
