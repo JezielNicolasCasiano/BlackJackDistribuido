@@ -11,7 +11,15 @@ api_url() { echo "http://$(minikube ip):30080"; }
 # psql dentro del pod de PostgreSQL
 psql_bd() { k exec -i postgres-0 -- sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -qtA "$@"' psql "$@"; }
 
-esperar_pods_listos() { k wait --for=condition=Ready pod --all --timeout="${1:-180s}" >/dev/null; }
+# Espera a cada Deployment y StatefulSet, no a una lista de pods: kubectl wait
+# toma la lista al empezar y se cuelga con pods que se están borrando (al bajar
+# réplicas) o con el pod de un Job terminado, que nunca queda Ready
+esperar_pods_listos() {
+  local obj
+  for obj in $(k get deploy,statefulset -o name); do
+    k rollout status "$obj" --timeout="${1:-180s}" >/dev/null || return 1
+  done
+}
 
 # Pod listo no implica BD lista, por eso se prueba una consulta real
 esperar_bd() {

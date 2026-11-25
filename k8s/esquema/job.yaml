@@ -1,0 +1,51 @@
+# Crea las tablas con bd/esquema.sql y termina.
+# Está en una subcarpeta para que kubectl apply -f k8s/ no lo lance: lo lanza
+# scripts/crear_esquema.sh, que antes carga el SQL en el ConfigMap esquema-sql.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: esquema
+  namespace: blackjack
+spec:
+  backoffLimit: 2                # reintentos si el pod falla
+  activeDeadlineSeconds: 180     # tope total, para que no quede colgado
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 999           # usuario postgres de la imagen, sin root
+      containers:
+        - name: psql
+          image: postgres:16.16  # misma imagen que la BD: trae psql y ya está descargada
+          command: ["sh", "-c"]
+          args:
+            - |
+              # Pod listo no implica BD lista, por eso se prueba una consulta real
+              for i in $(seq 60); do
+                psql -c 'SELECT 1' >/dev/null 2>&1 && break
+                sleep 1
+              done
+              psql -f /esquema/esquema.sql
+          env:
+            # psql lee la conexión de estas variables
+            - name: PGHOST
+              valueFrom:
+                configMapKeyRef: {name: blackjack-config, key: DB_HOST}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef: {name: postgres-credenciales, key: POSTGRES_USER}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: {name: postgres-credenciales, key: POSTGRES_PASSWORD}
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef: {name: postgres-credenciales, key: POSTGRES_DB}
+          volumeMounts:
+            - name: esquema
+              mountPath: /esquema
+              readOnly: true
+      volumes:
+        - name: esquema
+          configMap:
+            name: esquema-sql

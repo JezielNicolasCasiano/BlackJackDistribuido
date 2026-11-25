@@ -34,5 +34,6 @@ kubectl config set-context --current --namespace="$NS" >/dev/null   # minikube s
 msg "Manifiestos aplicados; esperando a que todo responda"
 esperar_pods_listos 300s
 esperar_bd
+"$RAIZ/scripts/crear_esquema.sh"
 esperar_cadena
 msg "Entorno listo en $(api_url)"
