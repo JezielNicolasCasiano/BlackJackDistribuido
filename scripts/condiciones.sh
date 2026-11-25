@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Uso: condiciones.sh ARCHIVO.txt
-# Registra las condiciones del equipo antes de una prueba (diseño, 9.1):
-# hardware, temperatura, carga, procesos pesados, versiones y configuración.
-# Avisa si el equipo no está en condiciones de medir (prueba de despliegue, sección 10).
+# Registra el estado del equipo antes de una prueba y avisa si no conviene medir
 set -uo pipefail
 source "$(dirname "$0")/comun.sh"
 archivo=${1:?Uso: condiciones.sh ARCHIVO.txt}
@@ -29,7 +27,7 @@ carga=$(cut -d' ' -f1 /proc/loadavg)
   ps -eo pcpu,comm --sort=-pcpu | sed -n '2,6p' | sed 's/^/  /'
 } > "$archivo"
 
-# Avisos: no impiden medir, pero quedan registrados
+# Los avisos no detienen la prueba
 avisos=0
 if [ -n "$temp" ] && [ "${temp%.*}" -ge 75 ]; then msg "AVISO: CPU a ${temp} °C"; avisos=1; fi
 if awk -v c="$carga" 'BEGIN{exit !(c > 2)}'; then msg "AVISO: carga de $carga antes de empezar; ¿hay otros procesos pesados?"; avisos=1; fi

@@ -1,4 +1,4 @@
-# API: punto de entrada, 1 réplica fija (diseño, secciones 4.2 y 8.1).
+# API: punto de entrada, 1 réplica
 ---
 apiVersion: v1
 kind: Service
@@ -6,12 +6,12 @@ metadata:
   name: api
   namespace: blackjack
 spec:
-  type: NodePort               # expuesta fuera del clúster para que k6 la alcance
+  type: NodePort               # accesible para k6
   selector:
     app: api
   ports:
     - port: 8000
-      nodePort: 30080          # puerto fijo: k6 siempre usa http://$(minikube ip):30080
+      nodePort: 30080          # puerto fijo para k6
 ---
 apiVersion: apps/v1
 kind: Deployment

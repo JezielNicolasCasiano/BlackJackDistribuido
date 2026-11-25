@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 # Uso: publicar_version.sh api|procesador VERSION
-# Publica una versión nueva del código de una pieza:
-#   1. Construye la imagen blackjack-<pieza>:<VERSION> dentro de Minikube
-#   2. Actualiza la etiqueta en su manifiesto (k8s/)
-#   3. Despliega y espera a que la cadena completa responda
-# No reutiliza etiquetas: si blackjack-procesador:0.2 pudiera tener dos
-# contenidos distintos, la versión de las imágenes dejaría de ser una
-# variable controlada (diseño, 9.1). Cada cambio de código lleva versión nueva.
+# Construye, actualiza el manifiesto y despliega. Cada cambio lleva versión nueva.
 set -euo pipefail
 source "$(dirname "$0")/comun.sh"
 pieza=${1:?Uso: publicar_version.sh api|procesador VERSION}; version=${2:?Falta la VERSION, por ejemplo 0.3}
@@ -29,12 +23,11 @@ msg "Construyendo $imagen (antes: $actual)"
 docker build -q -t "$imagen" "$RAIZ/$pieza" >/dev/null
 sed -i "s|image: blackjack-$pieza:[^ ]*|image: $imagen|" "$manifiesto"
 
-# set image y no apply: apply aplicaría el manifiesto completo y regresaría
-# las réplicas al valor del archivo, deshaciendo un kubectl scale (E2).
+# set image y no apply, para no deshacer un kubectl scale
 replicas=$(k get deploy "$pieza" -o jsonpath='{.spec.replicas}')
 k set image "deployment/$pieza" "$pieza=$imagen" >/dev/null
 k rollout status "deployment/$pieza" --timeout=180s >/dev/null
-# Esperar a que no queden pods de la versión anterior (sección 8 de la prueba de despliegue)
+# Espera a que no queden pods de la versión anterior
 until [ "$(k get pods -l app="$pieza" -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' | sort -u)" = "$imagen" ]; do sleep 1; done
 esperar_cadena
 msg "Publicado $imagen con $replicas réplica(s). Recuerda hacer commit de $(basename "$manifiesto") junto con el código."

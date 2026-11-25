@@ -2,10 +2,14 @@ __pycache__/
 *.pyc
 .venv/
 
-# Documentación: se entrega aparte al profesor, no va en el repositorio
+# Documentación (se entrega aparte)
 docs/
 Manual_Blackjack.docx
 Manual_Blackjack.pdf
 
-# Archivos del IDE
+# IDE
 .idea/
+
+# Generado por el IDE (las dependencias reales están en api/ y procesador/requirements.txt)
+pyproject.toml
+uv.lock

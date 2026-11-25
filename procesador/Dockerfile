@@ -1,4 +1,4 @@
-# Imagen base fija (la versión de las imágenes es una variable controlada, diseño 9.1)
+# Versión fija
 FROM python:3.12.16-slim
 
 WORKDIR /app
@@ -6,17 +6,16 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Primero las dependencias y después el código: así, cambiar main.py no
-# obliga a reinstalar todo (la capa de pip queda en caché).
+# Dependencias antes que el código para aprovechar la caché
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY main.py .
 
-# No correr como root dentro del contenedor
+# Sin root
 RUN useradd --create-home app
 USER app
 
 EXPOSE 8000
-# Forma de lista (exec): uvicorn es el PID 1 y recibe SIGTERM directamente
+# Forma exec para que uvicorn reciba SIGTERM
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

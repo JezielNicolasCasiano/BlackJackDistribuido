@@ -1,9 +1,4 @@
-"""Procesador: esqueleto de infraestructura.
-
-Contiene solo lo que necesita Kubernetes (sondas) y la conexión a la base de
-datos. La lógica del juego (/partidas, /pedir, /plantarse) se agrega aquí.
-Toda la configuración llega por variables de entorno (ConfigMap y Secret).
-"""
+"""Procesador: sondas y conexión a la BD. Aquí va la lógica del juego."""
 import os
 import socket
 from contextlib import asynccontextmanager
@@ -17,11 +12,9 @@ CONNINFO = (
     f"password={os.environ['POSTGRES_PASSWORD']}"
 )
 POOL_SIZE = int(os.environ.get("POOL_SIZE", "10"))
-POD = socket.gethostname()  # nombre del pod; sirve para ver quién atendió
+POD = socket.gethostname()
 
-# Pool de conexiones (diseño, sección 8.3). open=False evita conectarse al
-# importar el módulo, y check verifica cada conexión antes de prestarla,
-# para descartar las que murieron si PostgreSQL se reinició.
+# check descarta conexiones muertas si PostgreSQL se reinició
 pool = ConnectionPool(
     CONNINFO,
     min_size=1,
@@ -33,10 +26,7 @@ pool = ConnectionPool(
 
 @asynccontextmanager
 async def ciclo_de_vida(app: FastAPI):
-    # wait=False: el procesador arranca aunque PostgreSQL todavía no responda
-    # y el pool sigue intentando conectarse en segundo plano. Si fallar la
-    # conexión matara al proceso, una caída de la BD tumbaría también a los
-    # procesadores (falla en cascada, sección 8.2).
+    # Arranca aunque la BD no responda (evita fallas en cascada)
     pool.open(wait=False)
     yield
     pool.close()
@@ -47,13 +37,13 @@ app = FastAPI(title="Procesador", lifespan=ciclo_de_vida)
 
 @app.get("/salud")
 def salud():
-    """Sonda de vida: ¿estoy roto yo? No revisa la base de datos."""
+    """Vida: no revisa la BD."""
     return {"pod": POD}
 
 
 @app.get("/listo")
 def listo(respuesta: Response):
-    """Sonda de disponibilidad: ¿puedo atender ahora? Sí revisa la base de datos."""
+    """Disponibilidad: revisa la BD."""
     try:
         with pool.connection(timeout=1) as conexion:
             conexion.execute("SELECT 1")
@@ -65,5 +55,5 @@ def listo(respuesta: Response):
 
 @app.get("/quien")
 def quien():
-    """Ruta de diagnóstico: dice qué pod atendió la solicitud."""
+    """Diagnóstico: qué pod atendió."""
     return {"pod": POD}

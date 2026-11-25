@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Vacía todas las tablas antes de cada repetición (diseño, 9.1).
-# Se usa TRUNCATE y no se borran objetos de Kubernetes: borrar el namespace no
-# siempre borra los datos en Minikube (prueba de despliegue, sección 11).
+# Vacía las tablas antes de cada repetición. TRUNCATE porque borrar el namespace
+# no siempre borra los datos en Minikube.
 set -euo pipefail
 source "$(dirname "$0")/comun.sh"
 

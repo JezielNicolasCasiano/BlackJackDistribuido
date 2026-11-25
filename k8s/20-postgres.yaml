@@ -1,8 +1,6 @@
-# PostgreSQL: la única pieza con estado (diseño, secciones 3 y 8.1).
+# PostgreSQL: única pieza con estado
 ---
-# Service "headless" (clusterIP: None): no balancea, solo da un nombre DNS
-# estable a cada pod del StatefulSet (postgres-0.postgres).
-# Las demás piezas se conectan a "postgres:5432".
+# Headless: nombre DNS estable, sin balanceo
 apiVersion: v1
 kind: Service
 metadata:
@@ -33,15 +31,14 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16.16          # versión fija (variable controlada, sección 9.1)
+          image: postgres:16.16          # versión fija
           ports:
             - containerPort: 5432
           envFrom:
             - secretRef:
                 name: postgres-credenciales
           env:
-            # Subcarpeta dentro del volumen: evita que initdb choque con
-            # archivos que el aprovisionador pueda dejar en la raíz.
+            # Subcarpeta para que initdb no choque con archivos del volumen
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:
@@ -51,8 +48,7 @@ spec:
             exec:
               command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             periodSeconds: 5
-  # Cada pod del StatefulSet recibe su propio PVC (datos-postgres-0),
-  # que NO se borra cuando el pod muere.
+  # Un PVC por pod que sobrevive al pod
   volumeClaimTemplates:
     - metadata:
         name: datos

@@ -1,14 +1,8 @@
 #!/usr/bin/env bash
-# Uso: eliminar_pod.sh OBJETIVO MODO [ARCHIVO.csv]
-#   OBJETIVO: procesador | postgres
-#   MODO:     ordenada -> kubectl delete pod (SIGTERM y hasta 30 s de gracia)
-#             forzada  -> --grace-period=0 --force (caída abrupta)
-#             reinicio -> kubectl rollout restart (reemplaza todos los pods, E5)
-# Provoca el fallo y mide cuánto tarda Kubernetes en tener otra vez todas las
-# réplicas listas (E4, fallo de instancia, y E5, persistencia; diseño, 8.4).
-# Los pods se distinguen por su UID y no por su nombre, porque el pod nuevo de
-# un StatefulSet se llama igual que el anterior (prueba de despliegue, sección 5).
-# La marca de tiempo del fallo sirve para alinear con la serie por segundo de k6.
+# Uso: eliminar_pod.sh procesador|postgres ordenada|forzada|reinicio [ARCHIVO.csv]
+# Provoca un fallo y mide cuánto tarda en recuperarse (E4 y E5).
+# ordenada = delete, forzada = sin gracia, reinicio = rollout restart.
+# Usa UID porque el pod nuevo de un StatefulSet conserva el nombre.
 set -euo pipefail
 source "$(dirname "$0")/comun.sh"
 uso="Uso: eliminar_pod.sh procesador|postgres ordenada|forzada|reinicio [ARCHIVO.csv]"
@@ -25,7 +19,6 @@ victima=$(k get pods -l app="$objetivo" -o jsonpath='{.items[0].metadata.name}')
 
 uid_victima=$(k get pod "$victima" -o jsonpath='{.metadata.uid}')
 
-# UID de los pods listos en este momento
 uids_listos() {
   k get pods -l app="$objetivo" -o jsonpath='{range .items[*]}{.metadata.uid} {.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' \
     | awk '$2 == "True" {print $1}'
@@ -41,15 +34,15 @@ esac
 msg "Fallo provocado en $objetivo ($modo, $afectados) a las $marca"
 
 if [ "$modo" = reinicio ]; then
-  # Terminado cuando todas las réplicas listas son pods que no existían antes
+  # Todas las réplicas listas son pods nuevos
   until [ "$(uids_listos | grep -cvxF -f <(echo "$uids_antes"))" -ge "$replicas" ]; do sleep 0.25; done
 else
-  # Terminado cuando hay tantas réplicas listas como pide el controlador, sin contar a la víctima
+  # Réplicas completas sin contar a la víctima
   until [ "$(uids_listos | grep -cvxF "$uid_victima")" -ge "$replicas" ]; do sleep 0.25; done
 fi
 segundos=$(python3 -c "print(f'{$(date +%s.%N) - $t0:.2f}')")
 
-# Para PostgreSQL, además: cuánto tarda en aceptar una consulta real (prueba de despliegue, sección 6)
+# En PostgreSQL también se mide cuándo acepta consultas
 seg_bd=""
 if [ "$objetivo" = postgres ]; then esperar_bd; seg_bd=$(python3 -c "print(f'{$(date +%s.%N) - $t0:.2f}')"); fi
 msg "Réplicas listas otra vez tras $segundos s${seg_bd:+; la BD responde tras $seg_bd s}"

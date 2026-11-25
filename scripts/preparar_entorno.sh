@@ -1,11 +1,5 @@
 #!/usr/bin/env bash
-# Deja el entorno listo para experimentar. Se corre después de cada arranque
-# del equipo, porque minikube start deshace algunos ajustes.
-#   1. Arranca Minikube con la configuración de los experimentos (diseño, 9.1)
-#   2. Baja la resolución de metrics-server de 60 s a 15 s
-#   3. Construye las imágenes que falten dentro de Minikube
-#   4. Aplica los manifiestos y fija el namespace blackjack
-#   5. Espera a que la BD y la cadena completa respondan
+# Prepara Minikube, imágenes y manifiestos. Correr tras cada arranque del equipo.
 set -euo pipefail
 source "$(dirname "$0")/comun.sh"
 
@@ -13,8 +7,7 @@ msg "Arrancando Minikube (4 CPU, 8 GB)"
 minikube start --driver=docker --cpus=4 --memory=8g >/dev/null
 minikube addons enable metrics-server >/dev/null
 
-# metrics-server trae --metric-resolution=60s: en una prueba de 2 minutos solo
-# habría 2 mediciones de CPU. minikube start lo regresa a 60 s cada vez.
+# metrics-server mide cada 60 s, se baja a 15 s (minikube start lo revierte)
 args=$(kubectl -n kube-system get deploy metrics-server -o json | python3 -c '
 import json, sys
 a = json.load(sys.stdin)["spec"]["template"]["spec"]["containers"][0]["args"]
@@ -25,7 +18,7 @@ kubectl -n kube-system patch deploy metrics-server --type=json \
 kubectl -n kube-system rollout status deploy/metrics-server --timeout=120s >/dev/null
 msg "metrics-server con resolución de 15 s"
 
-# Imágenes: se construyen solo si no existen, con la etiqueta que piden los manifiestos
+# Construye solo las imágenes que falten
 eval "$(minikube docker-env)"
 for pieza in api procesador; do
   imagen=$(grep -ho "image: blackjack-$pieza:[^ ]*" "$RAIZ"/k8s/*.yaml | head -1 | cut -d' ' -f2)
