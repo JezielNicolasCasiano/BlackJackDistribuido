@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: blackjack
+      POSTGRES_USER: blackjack
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-blackjack_local}
+    volumes:
+      - datos_postgres:/var/lib/postgresql/data
+      - ./esquema.sql:/docker-entrypoint-initdb.d/01-esquema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U blackjack -d blackjack"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+  procesador:
+    build:
+      context: .
+      dockerfile: Dockerfile.distribuido
+    command: ["procesador:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: "host=postgres dbname=blackjack user=blackjack"
+      PGPASSWORD: ${POSTGRES_PASSWORD:-blackjack_local}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      IDEMPOTENCIA: ${IDEMPOTENCIA:-on}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/listo', timeout=3).close()"]
+      interval: 3s
+      timeout: 4s
+      retries: 15
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.distribuido
+    command: ["api:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      procesador:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+volumes:
+  datos_postgres:

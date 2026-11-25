@@ -3,6 +3,7 @@ import threading
 import time
 
 from baraja import Baraja, calcular_total, texto_mano
+from reglas import evaluar_resultado
 from pantalla import mostrar
 
 PAUSA = 0.4  # segundos entre acciones, solo para poder leer la salida
@@ -149,24 +150,9 @@ class Crupier:
 
     def calcular_resultados(self):
         total_c = calcular_total(self.mano_crupier)
-        bj_c = len(self.mano_crupier) == 2 and total_c == 21
         for id_jugador, mano in self.manos.items():
             total = calcular_total(mano)
-            bj = len(mano) == 2 and total == 21
-            if total > 21:
-                res = ("perdida", "PIERDE (se paso de 21)")
-            elif bj and not bj_c:
-                res = ("ganada", "GANA con BLACKJACK")
-            elif bj_c and not bj:
-                res = ("perdida", "PIERDE (el crupier tiene BLACKJACK)")
-            elif total_c > 21:
-                res = ("ganada", "GANA (el crupier se paso)")
-            elif total > total_c:
-                res = ("ganada", "GANA")
-            elif total < total_c:
-                res = ("perdida", "PIERDE")
-            else:
-                res = ("empate", "EMPATA")
+            res = evaluar_resultado(mano, self.mano_crupier)
             self.resultados[id_jugador] = res
             etiqueta = self.etiquetas[id_jugador]
             posicion = {"ganada": 0, "perdida": 1, "empate": 2}[res[0]]
