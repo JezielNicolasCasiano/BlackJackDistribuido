@@ -13,3 +13,4 @@ Manual_Blackjack.pdf
 # Generado por el IDE (las dependencias reales están en api/ y procesador/requirements.txt)
 pyproject.toml
 uv.lock
+.pytest_cache/
