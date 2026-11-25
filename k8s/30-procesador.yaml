@@ -1,0 +1,61 @@
+# Procesador: sin estado, de 1 a 3 réplicas (diseño, secciones 4 y 8).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: procesador
+  namespace: blackjack
+spec:
+  type: ClusterIP              # visible solo dentro del clúster: solo la API le habla
+  selector:
+    app: procesador
+  ports:
+    - port: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: procesador
+  namespace: blackjack
+spec:
+  replicas: 1                  # E2 cambia esto con: kubectl scale deployment/procesador --replicas=N
+  selector:
+    matchLabels:
+      app: procesador
+  template:
+    metadata:
+      labels:
+        app: procesador
+    spec:
+      containers:
+        - name: procesador
+          image: blackjack-procesador:0.1
+          imagePullPolicy: Never     # la imagen se construye dentro de Minikube, no se descarga
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: blackjack-config
+            - secretRef:
+                name: postgres-credenciales
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              cpu: 500m              # sin límite, E2 mediría otra cosa (sección 8.3)
+              memory: 256Mi
+          # Vida: ¿estoy roto yo? No toca la BD, para evitar la falla en cascada (8.2)
+          livenessProbe:
+            httpGet:
+              path: /salud
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 3
+          # Disponibilidad: ¿puedo atender ahora? Sí revisa la BD
+          readinessProbe:
+            httpGet:
+              path: /listo
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 1

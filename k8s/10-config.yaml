@@ -1,0 +1,27 @@
+# Configuración compartida (diseño, sección 8.1).
+# Nada de esto va en el código ni en las imágenes.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blackjack-config
+  namespace: blackjack
+data:
+  DB_HOST: postgres            # nombre del Service de PostgreSQL
+  DB_PORT: "5432"
+  POOL_SIZE: "10"              # conexiones por réplica (variable controlada, sección 9.1)
+  PROCESADOR_URL: http://procesador:8000
+  API_KEEPALIVE: "true"        # true reutiliza conexiones API -> procesador (ver docs/prueba-despliegue.md)
+---
+# Nota: en un proyecto real el Secret no se sube a Git; aquí se incluye
+# para que el despliegue desde cero sea reproducible en el laboratorio.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credenciales
+  namespace: blackjack
+type: Opaque
+stringData:
+  POSTGRES_USER: blackjack
+  POSTGRES_PASSWORD: blackjack-lab
+  POSTGRES_DB: blackjack
