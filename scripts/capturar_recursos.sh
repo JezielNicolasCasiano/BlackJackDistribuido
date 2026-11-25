@@ -21,6 +21,8 @@ while :; do
       mem=$3; f=1; if (mem ~ /Ki$/) f=1/1024; else if (mem ~ /Gi$/) f=1024;
       sub(/[KMG]i$/,"",mem); printf "%s,%s,%s,%.1f\n", t, $1, cpu, mem*f }' >> "$archivo"
   [ "$duracion" -gt 0 ] && [ $(( $(date +%s) - inicio )) -ge "$duracion" ] && break
-  sleep "$intervalo"
+  # sleep en segundo plano + wait: así el trap responde al instante. Con un
+  # sleep en primer plano, bash no atiende la señal hasta que el sleep termina.
+  sleep "$intervalo" & wait $!
 done
 msg "Captura terminada ($archivo)"
