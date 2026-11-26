@@ -2,9 +2,16 @@
 import os
 import socket
 from contextlib import asynccontextmanager
+from typing import Annotated
+from uuid import UUID
 
-from fastapi import FastAPI, Response
-from psycopg_pool import ConnectionPool
+import psycopg
+from fastapi import FastAPI, Header, Request, Response
+from fastapi.responses import JSONResponse
+from psycopg_pool import ConnectionPool, PoolTimeout
+from pydantic import BaseModel, Field
+
+import partidas
 
 CONNINFO = (
     f"host={os.environ['DB_HOST']} port={os.environ.get('DB_PORT', '5432')} "
@@ -34,6 +41,26 @@ async def ciclo_de_vida(app: FastAPI):
 
 app = FastAPI(title="Procesador", lifespan=ciclo_de_vida)
 
+# La clave llega en un encabezado. Si falta o no es un UUID, FastAPI responde 422
+Clave = Annotated[UUID, Header(alias="Idempotency-Key")]
+
+
+class NuevaPartida(BaseModel):
+    jugador: str = Field(min_length=1, max_length=50)
+
+
+@app.exception_handler(psycopg.OperationalError)
+@app.exception_handler(PoolTimeout)
+def sin_base_de_datos(solicitud: Request, error: Exception):
+    """Sin conexión a la BD: 503, para que el cliente reintente con la misma clave."""
+    return JSONResponse(status_code=503, content={"error": "sin base de datos", "pod": POD})
+
+
+@app.exception_handler(partidas.ClaveReutilizada)
+def clave_reutilizada(solicitud: Request, error: partidas.ClaveReutilizada):
+    """Error del cliente, no se arregla reintentando: 422."""
+    return JSONResponse(status_code=422, content={"error": str(error)})
+
 
 @app.get("/salud")
 def salud():
@@ -57,3 +84,10 @@ def listo(respuesta: Response):
 def quien():
     """Diagnóstico: qué pod atendió."""
     return {"pod": POD}
+
+
+@app.post("/partidas")
+def crear_partida(datos: NuevaPartida, clave: Clave, respuesta: Response):
+    codigo, cuerpo = partidas.crear_partida(pool, clave, datos.jugador)
+    respuesta.status_code = codigo
+    return cuerpo

@@ -1,1 +1,4 @@
+# Solo para el equipo de desarrollo: las dependencias de ambas piezas más pytest
+-r procesador/requirements.txt
+-r api/requirements.txt
 pytest==9.2.0

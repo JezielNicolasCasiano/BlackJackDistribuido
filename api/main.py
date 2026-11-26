@@ -1,9 +1,13 @@
 """API: punto de entrada, reenvía al procesador."""
 import os
 import socket
+from typing import Annotated
+from uuid import UUID
 
 import httpx
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Header, Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 PROCESADOR_URL = os.environ["PROCESADOR_URL"]
 POD = socket.gethostname()
@@ -17,6 +21,26 @@ cliente = httpx.Client(
 )
 
 app = FastAPI(title="API")
+
+# Misma validación que el procesador: lo mal formado se rechaza aquí con 422
+Clave = Annotated[UUID, Header(alias="Idempotency-Key")]
+
+
+class NuevaPartida(BaseModel):
+    jugador: str = Field(min_length=1, max_length=50)
+
+
+def reenviar(metodo, ruta, clave=None, cuerpo=None):
+    """Pasa la solicitud al procesador y devuelve su respuesta tal cual."""
+    encabezados = {"Idempotency-Key": str(clave)} if clave else {}
+    try:
+        r = cliente.request(metodo, ruta, headers=encabezados, json=cuerpo)
+        return JSONResponse(status_code=r.status_code, content=r.json())
+    except httpx.TimeoutException:
+        # El procesador pudo haber aplicado la acción: el cliente reintenta con la misma clave
+        return JSONResponse(status_code=504, content={"error": "el procesador no respondió a tiempo"})
+    except httpx.TransportError:
+        return JSONResponse(status_code=503, content={"error": "sin procesador disponible"})
 
 
 @app.get("/salud")
@@ -41,3 +65,8 @@ def quien(respuesta: Response):
     except httpx.TransportError:
         respuesta.status_code = 503
         return {"api": POD, "error": "sin procesador"}
+
+
+@app.post("/partidas")
+def crear_partida(datos: NuevaPartida, clave: Clave):
+    return reenviar("POST", "/partidas", clave, datos.model_dump())

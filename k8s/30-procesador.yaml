@@ -29,7 +29,7 @@ spec:
     spec:
       containers:
         - name: procesador
-          image: blackjack-procesador:0.1
+          image: blackjack-procesador:0.2
           imagePullPolicy: Never     # imagen local de Minikube
           ports:
             - containerPort: 8000

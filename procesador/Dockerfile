@@ -10,7 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY main.py reglas.py ./
+COPY main.py reglas.py partidas.py ./
 
 # Sin root
 RUN useradd --create-home app
