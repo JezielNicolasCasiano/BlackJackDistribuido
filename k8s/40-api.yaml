@@ -44,6 +44,12 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+          # Igual que el procesador: 5 s para que kube-proxy deje de mandarle conexiones
+          # antes de que uvicorn cierre. Con una sola réplica, sin esto se pierden solicitudes
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           livenessProbe:
             httpGet:
               path: /salud

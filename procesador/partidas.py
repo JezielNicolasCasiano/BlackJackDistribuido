@@ -3,6 +3,7 @@
 Aquí se combinan las reglas (reglas.py) con la base de datos. Las rutas de
 main.py solo traducen lo que devuelven estas funciones a respuestas HTTP.
 """
+import os
 import random
 
 from psycopg import errors
@@ -10,6 +11,20 @@ from psycopg.types.json import Jsonb
 
 from reglas import (calcular_resultado, calcular_total, crear_mazo, es_blackjack, jugar_crupier,
                     reparto_inicial, se_paso, turno_terminado)
+
+
+# Interruptor del experimento de control (diseño, sección 9.3). Con "off" no se
+# busca la clave y, al guardarla, un duplicado se ignora (ON CONFLICT DO NOTHING)
+# en lugar de chocar con r2_clave_unica, que también delataría el reintento.
+IDEMPOTENCIA = os.environ.get("IDEMPOTENCIA", "on").lower() != "off"
+
+GUARDAR_SOLICITUD = ("INSERT INTO solicitudes (clave, partida_id, operacion, respuesta) "
+                     "VALUES (%s, %s, %s, %s)")
+
+
+def _guardar_solicitud(conexion, clave, id_partida, operacion, cuerpo):
+    sql = GUARDAR_SOLICITUD + ("" if IDEMPOTENCIA else " ON CONFLICT (clave) DO NOTHING")
+    conexion.execute(sql, (clave, id_partida, operacion, Jsonb(cuerpo)))
 
 
 class ClaveReutilizada(Exception):
@@ -88,7 +103,7 @@ def crear_partida(pool, clave, jugador, rng=random):
             # 1. ¿Es un reintento? Todavía no existe una fila de partida que
             #    bloquear, el respaldo para reintentos simultáneos es la llave
             #    primaria de solicitudes (ver el except de abajo)
-            guardada = _respuesta_guardada(conexion, clave, "crear")
+            guardada = _respuesta_guardada(conexion, clave, "crear") if IDEMPOTENCIA else None
             if guardada is not None:
                 return 200, guardada
 
@@ -119,10 +134,7 @@ def crear_partida(pool, clave, jugador, rng=random):
 
             # 4. La clave y su respuesta, en la misma transacción que la partida
             cuerpo = vista(id_partida, estado, version, jugador_cartas, crupier_cartas, resultado)
-            conexion.execute(
-                "INSERT INTO solicitudes (clave, partida_id, operacion, respuesta) VALUES (%s, %s, 'crear', %s)",
-                (clave, id_partida, Jsonb(cuerpo)),
-            )
+            _guardar_solicitud(conexion, clave, id_partida, "crear", cuerpo)
         return 201, cuerpo
 
     except errors.UniqueViolation as error:
@@ -165,7 +177,8 @@ def _actuar(pool, id_partida, clave, version, operacion):
 
             # 2. La clave antes que la versión: un reintento llega con la versión
             #    vieja, porque el cliente nunca recibió la nueva
-            guardada = _respuesta_guardada(conexion, clave, operacion, id_partida)
+            guardada = (_respuesta_guardada(conexion, clave, operacion, id_partida)
+                        if IDEMPOTENCIA else None)
             if guardada is not None:
                 return 200, guardada
 
@@ -210,10 +223,7 @@ def _actuar(pool, id_partida, clave, version, operacion):
                 (pos_mazo + len(nuevas), estado, resultado, terminada, id_partida),
             )
             cuerpo = vista(id_partida, estado, version_actual + 1, jugador, crupier, resultado)
-            conexion.execute(
-                "INSERT INTO solicitudes (clave, partida_id, operacion, respuesta) VALUES (%s, %s, %s, %s)",
-                (clave, id_partida, operacion, Jsonb(cuerpo)),
-            )
+            _guardar_solicitud(conexion, clave, id_partida, operacion, cuerpo)
         # 5. Confirmado (al salir del with). Si el pod muere después de aquí, el
         #    reintento cae en el paso 2
         return 200, cuerpo

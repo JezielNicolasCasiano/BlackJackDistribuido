@@ -29,7 +29,7 @@ spec:
     spec:
       containers:
         - name: procesador
-          image: blackjack-procesador:0.3
+          image: blackjack-procesador:0.4
           imagePullPolicy: Never     # imagen local de Minikube
           ports:
             - containerPort: 8000
@@ -45,6 +45,13 @@ spec:
             limits:
               cpu: 500m              # sin límite, E2 no es comparable
               memory: 256Mi
+          # Al eliminar el pod, espera 5 s antes de que uvicorn reciba SIGTERM: kube-proxy
+          # tarda ~1 s en dejar de mandarle conexiones nuevas, y en ese intervalo el pod
+          # debe seguir aceptándolas en lugar de rechazarlas
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           # Vida: no toca la BD (evita fallas en cascada)
           livenessProbe:
             httpGet:

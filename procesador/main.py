@@ -91,8 +91,8 @@ def listo(respuesta: Response):
 
 @app.get("/quien")
 def quien():
-    """Diagnóstico: qué pod atendió."""
-    return {"pod": POD}
+    """Diagnóstico: qué pod atendió y con qué modo de idempotencia."""
+    return {"pod": POD, "idempotencia": "on" if partidas.IDEMPOTENCIA else "off"}
 
 
 @app.post("/partidas")
