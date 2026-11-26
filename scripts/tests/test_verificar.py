@@ -98,8 +98,9 @@ def mano_de(mano, duenio):
     return [c["carta"] for c in mano if c["duenio"] == duenio]
 
 
-REVISIONES = ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "A1", "A2", "A3", "A4",
-              "P1", "D1", "D2", "S1", "S2", "S3"]
+# Las que deben dar 0 en datos correctos: todas menos las cifras (N, I) y D, que suma D1 y D2
+REVISIONES = [d.id for d in verificar.REVISIONES
+              if d.grupo != "datos" and d.id != "D" and not d.id.startswith("I")]
 
 
 def test_datos_correctos_sin_violaciones(tmp_path, datos):
@@ -107,6 +108,24 @@ def test_datos_correctos_sin_violaciones(tmp_path, datos):
     v = valores(tmp_path)
     assert {r: v[r] for r in REVISIONES} == {r: 0 for r in REVISIONES}
     assert v["N1"] == 60 and v["I1"] == len(datos["solicitudes"])
+    assert v["I2"] == v["I3"] == v["I4"] == 0
+
+
+def test_las_filas_salen_de_la_tabla(tmp_path, datos):
+    escribir(tmp_path, datos)
+    filas = verificar.revisar(tmp_path).filas
+    assert [c for _, c, _, _ in filas] == verificar.IDS
+    assert all(verificar.POR_ID[c].grupo == g and verificar.POR_ID[c].descripcion == d
+               for g, c, d, _ in filas)
+
+
+def test_sin_archivo_de_claves_solo_se_revisa_d1(tmp_path, datos):
+    partida_duplicada(datos)
+    escribir(tmp_path, datos)
+    (tmp_path / "claves.jsonl").unlink()
+    v = valores(tmp_path)
+    assert v["D1"] == 1
+    assert not {"P1", "S1", "I1", "D"} & v.keys()
 
 
 def test_los_datos_cubren_los_casos(datos):
@@ -212,6 +231,25 @@ def sin_registro_en_k6(d):
     d["claves"].pop()
 
 
+def operacion_invalida(d):
+    d["solicitudes"][0]["operacion"] = "doblar"
+
+
+def con_reintento(d):
+    d["claves"][0].update(codigos=[504, 201])
+
+
+def fallida_sin_aplicar(d):
+    """k6 agotó los reintentos y la acción nunca llegó a la BD: no es una pérdida."""
+    r = next(r for r in d["claves"] if r["op"] == "pedir")
+    r.update(codigos=[504, 504, 504], codigo=504, confirmada=False)
+    d["solicitudes"] = [s for s in d["solicitudes"] if s["clave"] != r["clave"]]
+
+
+def clave_repetida_en_k6(d):
+    d["claves"].append(dict(d["claves"][0]))
+
+
 @pytest.mark.parametrize("falla, revision", [
     (carta_repetida, "R1"),
     (sin_resultado, "R3"),
@@ -231,8 +269,19 @@ def sin_registro_en_k6(d):
     (aplicada_sin_respuesta, "S1"),
     (falso_409, "S2"),
     (sin_registro_en_k6, "S3"),
+    (operacion_invalida, "R4"),
+    (con_reintento, "I2"),
+    (fallida_sin_aplicar, "I3"),
+    (clave_repetida_en_k6, "I4"),
 ])
 def test_detecta_la_falla(tmp_path, datos, falla, revision):
     falla(datos)
     escribir(tmp_path, datos)
     assert valores(tmp_path)[revision] >= 1
+
+
+def test_fallida_sin_aplicar_no_es_perdida_ni_sin_confirmar(tmp_path, datos):
+    fallida_sin_aplicar(datos)
+    escribir(tmp_path, datos)
+    v = valores(tmp_path)
+    assert v["I3"] == 1 and v["P1"] == 0 and v["S1"] == 0

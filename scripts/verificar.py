@@ -1,6 +1,7 @@
-"""Verificación de integridad después de una prueba (diseño, secciones 7.2 y 7.3).
+"""Verificación de integridad después de una prueba.
 
 Uso: python3 scripts/verificar.py DIRECTORIO
+     python3 scripts/verificar.py --revisiones   (lista las revisiones y qué cubre cada una)
 
 Lee la copia de las tablas que deja verificar.sh en DIRECTORIO/bd/ y, si
 existe, el registro de claves de k6 (DIRECTORIO/claves.jsonl). Escribe
@@ -13,20 +14,88 @@ biblioteca estándar: corre con el python3 del sistema.
 """
 import csv
 import gzip
+import argparse
 import json
 import re
 import sys
 from collections import Counter, defaultdict
+from typing import NamedTuple
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "procesador"))
-from reglas import calcular_resultado, calcular_total, es_blackjack  # noqa: E402
+from reglas import (CREAR, CRUPIER, EN_JUEGO, GANADA, JUGADOR, PEDIR, PERDIDA, PLANTARSE,  # noqa: E402
+                    TERMINADA, EMPATE, calcular_resultado, calcular_total, es_blackjack)
 
-ESTADOS = {"en_juego", "terminada"}
-RESULTADOS = {"ganada", "perdida", "empate"}
-DUENIOS = {"jugador", "crupier"}
-OPERACIONES = {"crear", "pedir", "plantarse"}
+ESTADOS = {EN_JUEGO, TERMINADA}
+RESULTADOS = {GANADA, PERDIDA, EMPATE}
+DUENIOS = {JUGADOR, CRUPIER}
+OPERACIONES = {CREAR, PEDIR, PLANTARSE}
 CARTA = re.compile(r"^(A|[2-9]|10|J|Q|K)[CDTP]$")
+
+
+class Def(NamedTuple):
+    """Una revisión: lo que sale en verificacion.csv y en la pantalla."""
+    id: str
+    grupo: str
+    descripcion: str   # texto de la columna "descripcion" del CSV
+    gravedad: str      # VIOLACION, AVISO, INFO (ver abajo)
+    casos: tuple = ()  # cada situación distinta que acusa el mismo ID
+
+
+# Gravedad de cada revisión:
+#   VIOLACION: se marca con !! si no es 0 y entra en el total de violaciones.
+#   AVISO:     se marca con !! si no es 0, pero no entra en el total (D y D2 repiten
+#              partidas que R6 y D1 ya cuentan; sumarlas las contaría dos veces).
+#              S3 también es AVISO: delata un registro de k6 incompleto, un problema
+#              del instrumento y no de la aplicación, pero hay que verlo.
+#   INFO:      nunca se marca ni se suma (cifras de la corrida y controles de k6).
+#              S1 es INFO: bajo fallos es esperable que una acción se aplique sin que
+#              el cliente reciba la confirmación, y tiene su propia cuenta.
+# La gravedad solo decide la marca y el total en pantalla; no sale en los CSV.
+VIOLACION, AVISO, INFO = "violacion", "aviso", "info"
+
+REVISIONES = [
+    Def("N1", "datos", "Partidas", INFO),
+    Def("N2", "datos", "Partidas terminadas", INFO),
+    Def("N3", "datos", "Cartas", INFO),
+    Def("N4", "datos", "Solicitudes", INFO),
+    Def("R1", "reglas", "Carta única: cartas repetidas en una partida", VIOLACION),
+    Def("R2", "reglas", "Clave única: claves aplicadas más de una vez", VIOLACION),
+    Def("R3", "reglas", "Fin con resultado: terminada sin resultado o al revés", VIOLACION),
+    Def("R4", "reglas", "Valores válidos: estado, resultado, dueño, carta u operación inválidos",
+        VIOLACION, ("estado, resultado, dueño o carta inválidos en una partida (se acusa por partida)",
+                    "operación inválida en una solicitud (se acusa por clave)")),
+    Def("R5", "reglas", "Cartas según el mazo: no coinciden con mazo[orden] o con pos_mazo",
+        VIOLACION, ("órdenes con huecos", "cantidad de cartas distinta de pos_mazo",
+                    "carta distinta de mazo[orden]")),
+    Def("R6", "reglas", "Cartas según las acciones: cartas del jugador distintas de 2 + pedir",
+        VIOLACION),
+    Def("R7", "reglas", "Sin cartas tras terminar: cartas o acciones después de 21, pasarse o plantarse",
+        VIOLACION, ("carta del jugador con el turno ya terminado (21, pasarse o blackjack)",
+                    "reparto inicial en otro orden",
+                    "más de un plantarse aplicado",
+                    "acciones aplicadas después de plantarse")),
+    Def("R8", "reglas", "Resultado correcto: distinto del que calcula calcular_resultado", VIOLACION),
+    Def("A1", "adicionales", "terminada_en no coincide con el estado (R3 no lo vigila)", VIOLACION),
+    Def("A2", "adicionales", "Crupier que jugó cuando no debía, de más o de menos", VIOLACION,
+        ("crupier con cartas de más: tomó una carta cuando no debía jugar o ya tenía 17 o más",
+         "crupier con cartas de menos: la partida terminó con el crupier por debajo de 17")),
+    Def("A3", "adicionales", "Estado que no corresponde a las cartas y acciones", VIOLACION),
+    Def("A4", "adicionales", "Versión distinta de 1 + acciones aplicadas", VIOLACION),
+    Def("P1", "k6", "Operaciones perdidas: k6 recibió 2xx y la clave no está en la BD", VIOLACION),
+    Def("D1", "k6", "Partidas creadas de más (sin solicitud de crear)", VIOLACION),
+    Def("D2", "k6", "Cartas del jugador de más (exceso de R6)", AVISO),
+    Def("D", "k6", "Operaciones duplicadas: D1 + D2", AVISO),
+    Def("S1", "k6", "Aplicadas sin confirmar: sin 2xx tras los reintentos, pero en la BD", INFO),
+    Def("S2", "k6", "Respondidas 409 aunque se aplicaron (control, H6)", INFO),
+    Def("S3", "k6", "Claves en la BD que k6 no registró (registro incompleto)", AVISO),
+    Def("I1", "k6", "Acciones registradas por k6", INFO),
+    Def("I2", "k6", "Acciones con reintento", INFO),
+    Def("I3", "k6", "Fallidas y no aplicadas (sin efecto en la BD)", INFO),
+    Def("I4", "k6", "Claves repetidas en el registro de k6 (error del script)", INFO),
+]
+POR_ID = {d.id: d for d in REVISIONES}
+IDS = [d.id for d in REVISIONES]
 
 
 def leer_csv(ruta):
@@ -58,14 +127,16 @@ class Revision:
         self.filas = []        # (grupo, clave, descripcion, valor)
         self.detalle = []      # (revision, referencia, detalle)
 
-    def agregar(self, grupo, clave, descripcion, casos):
+    def agregar(self, clave, casos):
         """casos: lista de (referencia, detalle). El valor es cuántos hay."""
-        self.filas.append((grupo, clave, descripcion, len(casos)))
+        d = POR_ID[clave]
+        self.filas.append((d.grupo, clave, d.descripcion, len(casos)))
         self.detalle.extend((clave, ref, det) for ref, det in casos)
 
-    def dato(self, grupo, clave, descripcion, valor):
-        """Una cifra informativa, sin detalle."""
-        self.filas.append((grupo, clave, descripcion, valor))
+    def dato(self, clave, valor):
+        """Una cifra, sin detalle."""
+        d = POR_ID[clave]
+        self.filas.append((d.grupo, clave, d.descripcion, valor))
 
 
 def recorrer(cartas):
@@ -76,13 +147,13 @@ def recorrer(cartas):
     """
     r7, crupier_mal = [], []
     duenios = [d for _, d, _ in cartas[:4]]
-    if duenios != ["jugador", "crupier", "jugador", "crupier"]:
+    if duenios != [JUGADOR, CRUPIER, JUGADOR, CRUPIER]:
         r7.append(f"reparto inicial en otro orden: {duenios}")
-    jugador = [c for _, d, c in cartas[:4] if d == "jugador"]
-    crupier = [c for _, d, c in cartas[:4] if d == "crupier"]
+    jugador = [c for _, d, c in cartas[:4] if d == JUGADOR]
+    crupier = [c for _, d, c in cartas[:4] if d == CRUPIER]
     turno_terminado = es_blackjack(jugador)
     for orden, duenio, carta in cartas[4:]:
-        if duenio == "jugador":
+        if duenio == JUGADOR:
             if turno_terminado or calcular_total(jugador) >= 21:
                 r7.append(f"carta {carta} (orden {orden}) con el turno ya terminado, "
                           f"total {calcular_total(jugador)}")
@@ -104,7 +175,7 @@ def verificar_reglas(partidas, cartas, solicitudes, rev):
         por_partida[s["partida_id"]][s["operacion"]] += 1
     orden_acciones = defaultdict(list)
     for s in solicitudes:
-        if s["operacion"] != "crear":
+        if s["operacion"] != CREAR:
             orden_acciones[s["partida_id"]].append((s["creada_en"], s["operacion"]))
 
     casos = defaultdict(list)
@@ -112,7 +183,7 @@ def verificar_reglas(partidas, cartas, solicitudes, rev):
     for pid, p in partidas.items():
         mano = cartas.get(pid, [])
         ops = por_partida[pid]
-        terminada = p["estado"] == "terminada"
+        terminada = p["estado"] == TERMINADA
 
         # R1. Carta única
         repetidas = [c for c, n in Counter(c for _, _, c in mano).items() if n > 1]
@@ -143,19 +214,19 @@ def verificar_reglas(partidas, cartas, solicitudes, rev):
             casos["R5"].append((pid, f"no coinciden con el mazo: {distintas}"))
 
         # R6. Cartas del jugador = 2 + pedir aplicados
-        n_jugador = sum(1 for _, d, _ in mano if d == "jugador")
-        if n_jugador != 2 + ops["pedir"]:
-            casos["R6"].append((pid, f"{n_jugador} cartas del jugador y {ops['pedir']} pedir"))
-            exceso_r6 += max(0, n_jugador - 2 - ops["pedir"])
+        n_jugador = sum(1 for _, d, _ in mano if d == JUGADOR)
+        if n_jugador != 2 + ops[PEDIR]:
+            casos["R6"].append((pid, f"{n_jugador} cartas del jugador y {ops[PEDIR]} pedir"))
+            exceso_r6 += max(0, n_jugador - 2 - ops[PEDIR])
 
         # R7. Sin cartas tras terminar (recorrido) y nada después de plantarse
         jugador, crupier, r7, crupier_mal = recorrer(mano)
         for d in r7:
             casos["R7"].append((pid, d))
         acciones = [op for _, op in sorted(orden_acciones[pid])]
-        if acciones.count("plantarse") > 1:
-            casos["R7"].append((pid, f"{acciones.count('plantarse')} plantarse aplicados"))
-        elif "plantarse" in acciones and acciones[-1] != "plantarse":
+        if acciones.count(PLANTARSE) > 1:
+            casos["R7"].append((pid, f"{acciones.count(PLANTARSE)} plantarse aplicados"))
+        elif PLANTARSE in acciones and acciones[-1] != PLANTARSE:
             casos["R7"].append((pid, f"acciones después de plantarse: {acciones}"))
 
         # R8. Resultado correcto
@@ -173,14 +244,14 @@ def verificar_reglas(partidas, cartas, solicitudes, rev):
         if terminada and not se_paso and not bj and calcular_total(crupier) < 17:
             casos["A2"].append((pid, f"el crupier se quedó en {calcular_total(crupier)}"))
         # Debe terminar justo cuando el jugador llega a 21, se pasa, tiene blackjack o se planta
-        debe_terminar = bj or calcular_total(jugador) >= 21 or ops["plantarse"] > 0
+        debe_terminar = bj or calcular_total(jugador) >= 21 or ops[PLANTARSE] > 0
         if terminada != debe_terminar:
             casos["A3"].append((pid, f"estado {p['estado']} con total {calcular_total(jugador)} "
-                                     f"y {ops['plantarse']} plantarse"))
+                                     f"y {ops[PLANTARSE]} plantarse"))
         # Cada acción aplicada sube la versión en 1
-        if p["version"] != 1 + ops["pedir"] + ops["plantarse"]:
+        if p["version"] != 1 + ops[PEDIR] + ops[PLANTARSE]:
             casos["A4"].append((pid, f"versión {p['version']} con "
-                                     f"{ops['pedir'] + ops['plantarse']} acciones"))
+                                     f"{ops[PEDIR] + ops[PLANTARSE]} acciones"))
 
     # R2. Clave única (la llave primaria lo impide; se cuenta por completitud)
     claves = Counter(s["clave"] for s in solicitudes)
@@ -189,38 +260,21 @@ def verificar_reglas(partidas, cartas, solicitudes, rev):
              for s in solicitudes if s["operacion"] not in OPERACIONES]
     casos["R4"] += malas
 
-    descripciones = [
-        ("R1", "Carta única: cartas repetidas en una partida"),
-        ("R2", "Clave única: claves aplicadas más de una vez"),
-        ("R3", "Fin con resultado: terminada sin resultado o al revés"),
-        ("R4", "Valores válidos: estado, resultado, dueño, carta u operación inválidos"),
-        ("R5", "Cartas según el mazo: no coinciden con mazo[orden] o con pos_mazo"),
-        ("R6", "Cartas según las acciones: cartas del jugador distintas de 2 + pedir"),
-        ("R7", "Sin cartas tras terminar: cartas o acciones después de 21, pasarse o plantarse"),
-        ("R8", "Resultado correcto: distinto del que calcula calcular_resultado"),
-    ]
-    for clave, desc in descripciones:
-        rev.agregar("reglas", clave, desc, casos[clave])
-    adicionales = [
-        ("A1", "terminada_en no coincide con el estado (R3 no lo vigila)"),
-        ("A2", "Crupier que jugó cuando no debía, de más o de menos"),
-        ("A3", "Estado que no corresponde a las cartas y acciones"),
-        ("A4", "Versión distinta de 1 + acciones aplicadas"),
-    ]
-    for clave, desc in adicionales:
-        rev.agregar("adicionales", clave, desc, casos[clave])
+    for d in REVISIONES:
+        if d.grupo in ("reglas", "adicionales"):
+            rev.agregar(d.id, casos[d.id])
     return exceso_r6
 
 
 def comparar_k6(directorio, partidas, solicitudes, exceso_r6, rev):
-    """Lo que vio k6 frente a lo que guardó la base de datos (diseño, sección 7.3)."""
-    con_crear = {s["partida_id"] for s in solicitudes if s["operacion"] == "crear"}
+    """Lo que vio k6 frente a lo que guardó la base de datos."""
+    con_crear = {s["partida_id"] for s in solicitudes if s["operacion"] == CREAR}
     sin_crear = [(pid, "partida sin solicitud de crear") for pid in partidas if pid not in con_crear]
 
     # jugar.sh lo comprime al terminar; recién salido de k6 está sin comprimir
     rutas = [r for r in (directorio / "claves.jsonl", directorio / "claves.jsonl.gz") if r.exists()]
     if not rutas:
-        rev.agregar("k6", "D1", "Partidas creadas de más (sin solicitud de crear)", sin_crear)
+        rev.agregar("D1", sin_crear)
         return
     abrir = gzip.open if rutas[0].suffix == ".gz" else open
     with abrir(rutas[0], "rt") as f:
@@ -242,18 +296,17 @@ def comparar_k6(directorio, partidas, solicitudes, exceso_r6, rev):
                        and r["clave"] not in en_bd)
     claves_repetidas = sum(n - 1 for n in Counter(r["clave"] for r in registros).values() if n > 1)
 
-    rev.agregar("k6", "P1", "Operaciones perdidas: k6 recibió 2xx y la clave no está en la BD", perdidas)
-    rev.agregar("k6", "D1", "Partidas creadas de más (sin solicitud de crear)", sin_crear)
-    rev.dato("k6", "D2", "Cartas del jugador de más (exceso de R6)", exceso_r6)
-    rev.dato("k6", "D", "Operaciones duplicadas: D1 + D2", len(sin_crear) + exceso_r6)
-    rev.agregar("k6", "S1", "Aplicadas sin confirmar: sin 2xx tras los reintentos, pero en la BD",
-                sin_confirmar)
-    rev.agregar("k6", "S2", "Respondidas 409 aunque se aplicaron (control, H6)", falsos_409)
-    rev.agregar("k6", "S3", "Claves en la BD que k6 no registró (registro incompleto)", sin_registro)
-    rev.dato("k6", "I1", "Acciones registradas por k6", len(registros))
-    rev.dato("k6", "I2", "Acciones con reintento", sum(1 for r in registros if len(r["codigos"]) > 1))
-    rev.dato("k6", "I3", "Fallidas y no aplicadas (sin efecto en la BD)", no_aplicadas)
-    rev.dato("k6", "I4", "Claves repetidas en el registro de k6 (error del script)", claves_repetidas)
+    rev.agregar("P1", perdidas)
+    rev.agregar("D1", sin_crear)
+    rev.dato("D2", exceso_r6)
+    rev.dato("D", len(sin_crear) + exceso_r6)
+    rev.agregar("S1", sin_confirmar)
+    rev.agregar("S2", falsos_409)
+    rev.agregar("S3", sin_registro)
+    rev.dato("I1", len(registros))
+    rev.dato("I2", sum(1 for r in registros if len(r["codigos"]) > 1))
+    rev.dato("I3", no_aplicadas)
+    rev.dato("I4", claves_repetidas)
 
 
 def revisar(directorio):
@@ -261,20 +314,33 @@ def revisar(directorio):
     partidas, cartas, solicitudes = leer_bd(directorio)
 
     rev = Revision()
-    rev.dato("datos", "N1", "Partidas", len(partidas))
-    rev.dato("datos", "N2", "Partidas terminadas",
-             sum(1 for p in partidas.values() if p["estado"] == "terminada"))
-    rev.dato("datos", "N3", "Cartas", sum(len(c) for c in cartas.values()))
-    rev.dato("datos", "N4", "Solicitudes", len(solicitudes))
+    rev.dato("N1", len(partidas))
+    rev.dato("N2", sum(1 for p in partidas.values() if p["estado"] == TERMINADA))
+    rev.dato("N3", sum(len(c) for c in cartas.values()))
+    rev.dato("N4", len(solicitudes))
     exceso_r6 = verificar_reglas(partidas, cartas, solicitudes, rev)
     comparar_k6(directorio, partidas, solicitudes, exceso_r6, rev)
     return rev
 
 
+def listar_revisiones():
+    for d in REVISIONES:
+        print(f"{d.id:<3} {d.grupo:<11} {d.gravedad:<9} {d.descripcion}")
+        for caso in d.casos:
+            print(f"      - {caso}")
+
+
 def main():
-    if len(sys.argv) != 2:
-        sys.exit(__doc__.strip().splitlines()[2])
-    directorio = Path(sys.argv[1])
+    ap = argparse.ArgumentParser(description="Verificación de integridad de una corrida.")
+    ap.add_argument("directorio", nargs="?", help="directorio de resultados, con bd/ dentro")
+    ap.add_argument("--revisiones", action="store_true",
+                    help="lista las revisiones, su gravedad y los casos que cubre cada una")
+    args = ap.parse_args()
+    if args.revisiones:
+        return listar_revisiones()
+    if not args.directorio:
+        ap.error("falta el directorio")
+    directorio = Path(args.directorio)
     rev = revisar(directorio)
 
     with open(directorio / "verificacion.csv", "w", newline="") as f:
@@ -287,11 +353,9 @@ def main():
         w.writerows(rev.detalle)
 
     for grupo, clave, desc, valor in rev.filas:
-        marca = "  " if grupo in ("datos",) or clave.startswith(("I", "S")) or valor == 0 else "!!"
+        marca = "!!" if POR_ID[clave].gravedad != INFO and valor != 0 else "  "
         print(f"{marca} {clave:<3} {valor:>7}  {desc}")
-    # D2 no se suma: son las mismas partidas de R6 contadas por carta
-    violaciones = sum(v for g, c, _, v in rev.filas
-                      if g in ("reglas", "adicionales") or c in ("P1", "D1"))
+    violaciones = sum(v for _, c, _, v in rev.filas if POR_ID[c].gravedad == VIOLACION)
     print(f"\nViolaciones de integridad (R1-R8, A1-A4, P1, D1): {violaciones}")
 
 
