@@ -40,3 +40,17 @@ esperar_cadena() {
   done
   msg "ERROR: la cadena completa no respondió"; return 1
 }
+
+# Temperatura del paquete de la CPU en grados enteros (vacío si no hay sensores)
+temperatura() { sensors 2>/dev/null | awk '/Package id 0/ {gsub(/[+°C]/,"",$4); split($4,a,"."); print a[1]; exit}'; }
+
+# El equipo se apagó por calor varias veces durante las pruebas: antes de cada
+# corrida se espera a que la CPU baje de TEMP_INICIO (60 °C por defecto)
+esperar_frio() {
+  local t limite=${TEMP_INICIO:-60}
+  t=$(temperatura); [ -n "$t" ] || return 0
+  [ "$t" -lt "$limite" ] && return 0
+  msg "CPU a ${t} °C; esperando a que baje de ${limite} °C"
+  while t=$(temperatura); [ "$t" -ge "$limite" ]; do sleep 5; done
+  msg "CPU a ${t} °C"
+}

@@ -80,8 +80,15 @@ def _cartas(conexion, id_partida):
 
 
 def consultar_partida(pool, id_partida):
-    """El estado actual de una partida. Solo lee: no bloquea ni cambia nada."""
+    """El estado actual de una partida. Solo lee: no bloquea ni cambia nada.
+
+    Son dos lecturas (la partida y sus cartas). En READ COMMITTED cada una ve
+    los datos confirmados hasta ese momento, y un pedir confirmado entre ambas
+    daría la versión anterior con las cartas nuevas. REPEATABLE READ toma una
+    sola foto de la BD en la primera lectura y la usa para las dos.
+    """
     with pool.connection() as conexion:
+        conexion.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         fila = conexion.execute(
             "SELECT estado, version, resultado FROM partidas WHERE id = %s", (id_partida,)
         ).fetchone()

@@ -142,6 +142,8 @@ def test_blackjack_termina_la_partida_al_crearse(cliente):
     ({}, {"jugador": "J1"}),                                  # sin clave
     ({"Idempotency-Key": "abc"}, {"jugador": "J1"}),          # clave que no es UUID
     ({"Idempotency-Key": str(uuid.uuid4())}, {"jugador": ""}),   # jugador vacío
+    ({"Idempotency-Key": str(uuid.uuid4())}, {"jugador": "   "}),  # solo espacios
+    ({"Idempotency-Key": str(uuid.uuid4())}, {"jugador": "J1", "extra": 1}),  # campo de más
     ({"Idempotency-Key": str(uuid.uuid4())}, {}),             # sin jugador
 ])
 def test_solicitud_mal_formada_es_422(cliente, encabezados, cuerpo):
@@ -158,3 +160,27 @@ def test_sin_base_de_datos_es_503(cliente, monkeypatch):
         assert crear(cliente).status_code == 503
     finally:
         caido.close()
+
+
+# ---------------- Sin esquema ----------------
+
+def test_sin_tablas_no_esta_listo_y_responde_503(cliente):
+    """Si la BD responde pero la tabla no existe, el pod no recibe tráfico (/listo
+    503) y una operación responde 503, no 500. Se renombra la tabla un momento."""
+    with main.pool.connection() as conexion:
+        conexion.execute("ALTER TABLE partidas RENAME TO partidas_oculta")
+    try:
+        assert cliente.get("/listo").status_code == 503
+        r = crear(cliente)
+        assert r.status_code == 503 and r.json()["error"] == "sin esquema"
+    finally:
+        with main.pool.connection() as conexion:
+            conexion.execute("ALTER TABLE partidas_oculta RENAME TO partidas")
+    assert cliente.get("/listo").status_code == 200
+
+
+def test_jugador_sin_espacios_alrededor(cliente):
+    r = crear(cliente, jugador="  J1  ")
+    assert r.status_code == 201
+    with main.pool.connection() as conexion:
+        assert conexion.execute("SELECT jugador FROM partidas").fetchone()[0] == "J1"

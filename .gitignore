@@ -15,5 +15,5 @@ pyproject.toml
 uv.lock
 .pytest_cache/
 
-# Salida de las corridas (se decidirá en la parte 5 si se sube)
+# Salida de las corridas: pesa varios MB por corrida, no se sube
 resultados/

@@ -15,6 +15,9 @@ carga=$(cut -d' ' -f1 /proc/loadavg)
   echo "kernel: $(uname -r)"
   echo "temperatura_cpu_c: ${temp:-desconocida}"
   echo "carga_1min: $carga"
+  echo "turbo: $([ "$(cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null)" = 1 ] && echo apagado || echo encendido)"
+  echo "frecuencia_max_mhz: $(( $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null || echo 0) / 1000 ))"
+  echo "perfil_energia: $(powerprofilesctl get 2>/dev/null || echo desconocido)"
   echo "docker: $(docker version --format '{{.Server.Version}}' 2>/dev/null)"
   echo "minikube: $(minikube version --short 2>/dev/null)"
   echo "kubectl_cliente: $(kubectl version --client -o json 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin)["clientVersion"]["gitVersion"])')"
@@ -30,5 +33,6 @@ carga=$(cut -d' ' -f1 /proc/loadavg)
 # Los avisos no detienen la prueba
 avisos=0
 if [ -n "$temp" ] && [ "${temp%.*}" -ge 75 ]; then msg "AVISO: CPU a ${temp} °C"; avisos=1; fi
+if [ "$(cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null)" = 0 ]; then msg "AVISO: turbo encendido (las mediciones dependen de la temperatura)"; avisos=1; fi
 if awk -v c="$carga" 'BEGIN{exit !(c > 2)}'; then msg "AVISO: carga de $carga antes de empezar; ¿hay otros procesos pesados?"; avisos=1; fi
 [ "$avisos" -eq 0 ] && msg "Condiciones registradas en $archivo" || echo "avisos: sí" >> "$archivo"

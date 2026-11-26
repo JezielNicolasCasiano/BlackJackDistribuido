@@ -1,13 +1,15 @@
 """API: punto de entrada, reenvía al procesador."""
+import logging
 import os
 import socket
+from time import perf_counter
 from typing import Annotated
 from uuid import UUID
 
 import httpx
-from fastapi import FastAPI, Header, Response
+from fastapi import FastAPI, Header, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 PROCESADOR_URL = os.environ["PROCESADOR_URL"]
 POD = socket.gethostname()
@@ -22,16 +24,35 @@ cliente = httpx.Client(
 
 app = FastAPI(title="API")
 
+# Una línea por solicitud con su clave, código y duración. Reemplaza el registro
+# de acceso de uvicorn (--no-access-log en el Dockerfile), que no trae la clave:
+# con ella se puede seguir un reintento en los registros de E4 y E5
+registro = logging.getLogger("uvicorn.error")
+
+
+@app.middleware("http")
+async def registrar_solicitud(solicitud: Request, siguiente):
+    inicio = perf_counter()
+    respuesta = await siguiente(solicitud)
+    if solicitud.url.path not in ("/salud", "/listo"):   # las sondas solo harían ruido
+        registro.info("%s %s clave=%s codigo=%s ms=%.1f",
+                      solicitud.method, solicitud.url.path,
+                      solicitud.headers.get("Idempotency-Key", "-"),
+                      respuesta.status_code, (perf_counter() - inicio) * 1000)
+    return respuesta
+
 # Misma validación que el procesador: lo mal formado se rechaza aquí con 422
 Clave = Annotated[UUID, Header(alias="Idempotency-Key")]
 
 
 class NuevaPartida(BaseModel):
-    jugador: str = Field(min_length=1, max_length=50)
+    model_config = ConfigDict(extra="forbid")
+    jugador: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
 
 
 class Accion(BaseModel):
-    version: int = Field(ge=1)
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(strict=True, ge=1)
 
 
 def reenviar(metodo, ruta, clave=None, cuerpo=None):

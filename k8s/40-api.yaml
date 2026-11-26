@@ -30,7 +30,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: blackjack-api:0.4
+          image: blackjack-api:0.5
           imagePullPolicy: Never
           ports:
             - containerPort: 8000

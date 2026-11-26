@@ -31,9 +31,12 @@ done
 
 kubectl apply -f "$RAIZ/k8s/" >/dev/null
 kubectl config set-context --current --namespace="$NS" >/dev/null   # minikube start lo regresa a default
-msg "Manifiestos aplicados; esperando a que todo responda"
-esperar_pods_listos 300s
+msg "Manifiestos aplicados; esperando a PostgreSQL"
+# Primero la BD y el esquema: el procesador no queda listo sin las tablas
+# (su /listo las revisa), así que esperarlo antes sería esperar para siempre
+k rollout status statefulset/postgres --timeout=300s >/dev/null
 esperar_bd
 "$RAIZ/scripts/crear_esquema.sh"
+esperar_pods_listos 300s
 esperar_cadena
 msg "Entorno listo en $(api_url)"

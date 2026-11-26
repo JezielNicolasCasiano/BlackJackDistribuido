@@ -10,7 +10,7 @@ data:
   DB_PORT: "5432"
   POOL_SIZE: "10"              # conexiones por réplica
   PROCESADOR_URL: http://procesador:8000
-  API_KEEPALIVE: "true"        # false reparte mejor entre pods
+  API_KEEPALIVE: "false"       # calibración: con true una de 3 réplicas casi no recibía trabajo
   IDEMPOTENCIA: "on"           # off solo en el experimento de control (scripts/idempotencia.sh)
 ---
 # Secret en Git solo por ser un proyecto de laboratorio

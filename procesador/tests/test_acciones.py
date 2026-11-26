@@ -60,6 +60,30 @@ def test_consultar_devuelve_lo_mismo_que_al_crear(cliente, partida_con):
     assert "7D" not in str(r.json())              # la oculta tampoco viaja al consultar
 
 
+def test_consultar_ve_un_solo_estado(cliente, partida_con, monkeypatch):
+    """Un pedir confirmado entre las dos lecturas de la consulta no se mezcla.
+
+    Se fuerza la carrera: justo antes de leer las cartas, otra conexión pide y
+    confirma. La consulta debe responder el estado anterior completo (versión 1
+    y dos cartas), no la versión 1 con la carta nueva.
+    """
+    p = partida_con("2C", "10D", "3C", "7D", "4C")
+    original = partidas._cartas
+
+    def pedir_en_medio(conexion, id_partida):
+        monkeypatch.setattr(partidas, "_cartas", original)   # solo la primera vez
+        codigo, _ = partidas.pedir(main.pool, id_partida, uuid.uuid4(), 1)
+        assert codigo == 200
+        return original(conexion, id_partida)
+
+    monkeypatch.setattr(partidas, "_cartas", pedir_en_medio)
+    r = cliente.get(f"/partidas/{p['id']}")
+    assert r.status_code == 200 and r.json() == p
+    # Y la siguiente consulta ya ve el pedir completo
+    despues = cliente.get(f"/partidas/{p['id']}").json()
+    assert despues["version"] == 2 and despues["jugador"]["cartas"] == ["2C", "3C", "4C"]
+
+
 def test_consultar_partida_que_no_existe(cliente):
     assert cliente.get(f"/partidas/{uuid.uuid4()}").status_code == 404
     assert cliente.get("/partidas/no-es-uuid").status_code == 422
@@ -214,7 +238,13 @@ def test_pedir_partida_que_no_existe_es_404(cliente):
     assert r.status_code == 404
 
 
-@pytest.mark.parametrize("cuerpo", [{}, {"version": 0}, {"version": "uno"}])
+@pytest.mark.parametrize("cuerpo", [
+    {}, {"version": 0}, {"version": "uno"},
+    {"version": "1"},                 # texto, aunque parezca número
+    {"version": True},                # booleano
+    {"version": 1.5},
+    {"version": 1, "extra": 1},       # campo que no existe
+])
 def test_version_invalida_es_422(cliente, partida_con, cuerpo):
     p = partida_con("2C", "10D", "3C", "7D")
     r = cliente.post(f"/partidas/{p['id']}/pedir", json=cuerpo,

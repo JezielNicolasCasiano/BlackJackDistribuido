@@ -8,8 +8,9 @@ from uuid import UUID
 import psycopg
 from fastapi import FastAPI, Header, Request, Response
 from fastapi.responses import JSONResponse
+from psycopg import errors
 from psycopg_pool import ConnectionPool, PoolTimeout
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 import partidas
 
@@ -45,12 +46,17 @@ app = FastAPI(title="Procesador", lifespan=ciclo_de_vida)
 Clave = Annotated[UUID, Header(alias="Idempotency-Key")]
 
 
+# Validación estricta: un campo de más o una versión que no es entero ("1",
+# true) son errores del cliente y se rechazan con 422 en lugar de adivinar
 class NuevaPartida(BaseModel):
-    jugador: str = Field(min_length=1, max_length=50)
+    model_config = ConfigDict(extra="forbid")
+    # Sin espacios alrededor, para que "  " cuente como vacío
+    jugador: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
 
 
 class Accion(BaseModel):
-    version: int = Field(ge=1)       # la versión que vio el jugador al decidir
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(strict=True, ge=1)   # la versión que vio el jugador al decidir
 
 
 @app.exception_handler(psycopg.OperationalError)
@@ -58,6 +64,12 @@ class Accion(BaseModel):
 def sin_base_de_datos(solicitud: Request, error: Exception):
     """Sin conexión a la BD: 503, para que el cliente reintente con la misma clave."""
     return JSONResponse(status_code=503, content={"error": "sin base de datos", "pod": POD})
+
+
+@app.exception_handler(errors.UndefinedTable)
+def sin_esquema(solicitud: Request, error: Exception):
+    """La BD responde pero las tablas no existen (aún no corre el Job del esquema): 503."""
+    return JSONResponse(status_code=503, content={"error": "sin esquema", "pod": POD})
 
 
 @app.exception_handler(partidas.NoExiste)
@@ -79,10 +91,13 @@ def salud():
 
 @app.get("/listo")
 def listo(respuesta: Response):
-    """Disponibilidad: revisa la BD."""
+    """Disponibilidad: revisa que la BD responda y que el esquema exista.
+
+    Sin la tabla, cada operación fallaría; mejor no recibir tráfico.
+    """
     try:
         with pool.connection(timeout=1) as conexion:
-            conexion.execute("SELECT 1")
+            conexion.execute("SELECT 1 FROM partidas LIMIT 1")
         return {"listo": True, "pod": POD}
     except Exception as error:
         respuesta.status_code = 503
