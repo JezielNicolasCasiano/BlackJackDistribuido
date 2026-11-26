@@ -6,8 +6,7 @@ source "$(dirname "$0")/comun.sh"
 n=${1:?Uso: escalar.sh N}
 
 k scale deployment/procesador --replicas="$n" >/dev/null
-k rollout status deployment/procesador --timeout=180s >/dev/null
-until [ "$(k get pods -l app=procesador --no-headers | wc -l)" -eq "$n" ]; do sleep 1; done  # sin pods terminando
+esperar_rollout procesador   # incluye esperar a que no queden pods terminando
 # El tráfico tarda ~1.2 s en llegar a un pod nuevo
 sleep 5
 msg "Procesador con $n réplica(s) lista(s)"

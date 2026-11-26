@@ -21,7 +21,7 @@ msg "metrics-server con resolución de 15 s"
 # Construye solo las imágenes que falten
 eval "$(minikube docker-env)"
 for pieza in api procesador; do
-  imagen=$(grep -ho "image: blackjack-$pieza:[^ ]*" "$RAIZ"/k8s/*.yaml | head -1 | cut -d' ' -f2)
+  imagen=$(imagen_de "$(manifiesto_de "$pieza")")
   if docker image inspect "$imagen" >/dev/null 2>&1; then
     msg "Imagen $imagen ya existe"
   else
@@ -38,9 +38,17 @@ k rollout status statefulset/postgres --timeout=300s >/dev/null
 esperar_bd
 "$RAIZ/scripts/crear_esquema.sh"
 esperar_pods_listos 300s
+# Deja el modo de idempotencia en "on" de forma explícita (quita una sobrescritura
+# que pudiera haber quedado de un experimento de control)
+"$RAIZ/scripts/idempotencia.sh" on
 esperar_cadena
 msg "Entorno listo en $(api_url)"
-# El turbo se vuelve a encender con cada reinicio del equipo (estructura, sección 7)
+# El turbo se vuelve a encender con cada reinicio del equipo, y con él las mediciones
+# dependen de la temperatura del momento
 if [ "$(cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null)" = 0 ]; then
   msg "AVISO: turbo encendido. Antes de medir: echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo"
+fi
+# La frecuencia mínima también vuelve a su valor bajo con cada reinicio
+if ! frecuencia_fija; then
+  msg "AVISO: frecuencia de la CPU libre. Antes de medir: $(comando_fijar_frecuencia)"
 fi

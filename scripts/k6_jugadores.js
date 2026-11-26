@@ -1,4 +1,4 @@
-// Jugadores de blackjack para los experimentos (diseño, secciones 9 y 10.3).
+// Jugadores de blackjack para los experimentos de carga.
 // Cada iteración es una partida completa jugada con una estrategia del primer
 // proyecto (blackjack/jugador.py), repartidas por usuario virtual (VU).
 //
@@ -8,7 +8,7 @@
 // Variables (-e NOMBRE=valor):
 //   VUS=10              usuarios virtuales, cada uno juega una partida tras otra
 //   DURACION_S=120      tiempo medido
-//   CALENTAMIENTO_S=30  tiempo previo que no se cuenta (diseño, sección 9.1)
+//   CALENTAMIENTO_S=30  tiempo previo que no se cuenta
 //   PAUSA_S=0           espera entre una acción y la siguiente ("pensar")
 //   CONCURRENTES=0      fracción de partidas que envían dos pedir simultáneos (E3)
 //   INTENTOS=3          intentos por acción, con la misma clave
@@ -18,11 +18,11 @@
 //
 // Registro de claves: cada acción escribe una línea JSON con console.log. Con
 // --console-output esas líneas forman el archivo que verificar.py compara con
-// la tabla solicitudes (diseño, sección 7.3).
+// la tabla solicitudes de la base de datos.
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { sleep } from 'k6';
-import { Counter } from 'k6/metrics';
+import { Counter, Trend } from 'k6/metrics';
 
 const API = __ENV.API_URL;
 const num = (nombre, defecto) => Number(__ENV[nombre] ?? defecto);
@@ -36,8 +36,11 @@ const ESPERA_S = num('ESPERA_S', 0.5);
 const TIMEOUT = __ENV.TIMEOUT || '8s';
 const MAX_ACCIONES = 30; // seguro contra un ciclo infinito por un error del script
 
-// Solo se reintenta lo que se puede arreglar esperando (diseño, sección 10.3).
-// 0 es "sin respuesta": venció el tiempo de k6 o se cortó la conexión
+// Solo se reintenta lo que se puede arreglar esperando: 503 y 504 son un
+// procesador ocupado o caído, y 0 es "sin respuesta" (venció el tiempo de k6 o se
+// cortó la conexión). Un 502 (el procesador contestó algo que no es JSON) es una
+// respuesta rota que reintentar no arregla, así que no entra; igual que cualquier
+// otro no-2xx, termina contada como acción agotada
 const REINTENTABLE = new Set([0, 503, 504]);
 
 // Las rutas llevan el id de la partida; sin un nombre fijo, k6 crearía una
@@ -71,7 +74,7 @@ export const options = {
   summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
 };
 
-// 409 es una respuesta correcta del protocolo, no un fallo (diseño, sección 9.4)
+// 409 es una respuesta correcta del protocolo (conflicto de versión), no un fallo
 http.setResponseCallback(http.expectedStatuses({ min: 200, max: 299 }, 409));
 
 const conflictos = new Counter('conflictos');               // respuestas 409
@@ -81,6 +84,9 @@ const erroresCliente = new Counter('errores_cliente');      // 404 o 422: error 
 const terminadas = new Counter('partidas_terminadas');
 const abandonadas = new Counter('partidas_abandonadas');
 const dobles = new Counter('pedir_dobles');
+// Segundos desde el inicio del escenario en que se envió cada solicitud. Solo sirve
+// para el resumen: su máximo dice hasta cuándo se jugó de verdad (ver handleSummary)
+const marcaEnvio = new Trend('marca_envio_s');
 
 // ---- Estrategias del primer proyecto: true si el jugador pide carta ----
 const ESTRATEGIAS = {
@@ -92,34 +98,40 @@ const ESTRATEGIAS = {
 };
 const NOMBRES_ESTRATEGIAS = Object.keys(ESTRATEGIAS);
 
+const desdeInicio = () => (Date.now() - exec.scenario.startTime) / 1000;
+
+// La fase se decide al enviar el primer intento de cada acción y los reintentos la
+// conservan: una acción que empieza en la medición y termina de reintentarse en el
+// cierre sigue siendo de la medición
 function fase() {
-  const s = (Date.now() - exec.scenario.startTime) / 1000;
+  const s = desdeInicio();
   if (s < CALENTAMIENTO_S) return 'calentamiento';
   return s < CALENTAMIENTO_S + DURACION_S ? 'medicion' : 'cierre';
 }
 
-function parametros(op, clave) {
+function parametros(op, clave, faseAccion) {
   return {
     headers: { 'Content-Type': 'application/json', 'Idempotency-Key': clave },
     timeout: TIMEOUT,
-    tags: { name: NOMBRES[op], op, fase: fase() },
+    tags: { name: NOMBRES[op], op, fase: faseAccion },
   };
 }
 
-function solicitud(op, partida, cuerpo, clave) {
+function solicitud(op, partida, cuerpo, clave, faseAccion) {
+  marcaEnvio.add(desdeInicio());
   const url = op === 'crear' ? `${API}/partidas` : `${API}/partidas/${partida}/${op}`;
-  return ['POST', url, JSON.stringify(cuerpo), parametros(op, clave)];
+  return ['POST', url, JSON.stringify(cuerpo), parametros(op, clave, faseAccion)];
 }
 
 // Termina los intentos de una acción cuya primera respuesta ya llegó y deja su
 // registro. La clave no cambia entre intentos: eso es lo que permite al
 // procesador reconocer el reintento
-function completar(op, partida, cuerpo, clave, r) {
+function completar(op, partida, cuerpo, clave, r, faseAccion) {
   const codigos = [r.status];
   for (let i = 1; i < INTENTOS && REINTENTABLE.has(r.status); i++) {
     reintentos.add(1);
     sleep(ESPERA_S * 2 ** (i - 1));
-    const [metodo, url, datos, params] = solicitud(op, partida, cuerpo, clave);
+    const [metodo, url, datos, params] = solicitud(op, partida, cuerpo, clave, faseAccion);
     r = http.request(metodo, url, datos, params);
     codigos.push(r.status);
   }
@@ -135,7 +147,7 @@ function completar(op, partida, cuerpo, clave, r) {
   console.log(JSON.stringify({
     t: new Date().toISOString(),
     vu: exec.vu.idInTest,
-    fase: fase(),
+    fase: faseAccion,
     op,
     clave,
     partida: partida ?? estado?.id ?? null,
@@ -148,18 +160,20 @@ function completar(op, partida, cuerpo, clave, r) {
 
 function enviar(op, partida, cuerpo) {
   const clave = crypto.randomUUID();
-  const [metodo, url, datos, params] = solicitud(op, partida, cuerpo, clave);
-  return completar(op, partida, cuerpo, clave, http.request(metodo, url, datos, params));
+  const faseAccion = fase();
+  const [metodo, url, datos, params] = solicitud(op, partida, cuerpo, clave, faseAccion);
+  return completar(op, partida, cuerpo, clave, http.request(metodo, url, datos, params), faseAccion);
 }
 
 // Dos pedir distintos (cada uno con su clave) sobre la misma versión, al mismo
-// tiempo. Lo esperado: uno 200 y otro 409 (diseño, sección 6.4)
+// tiempo. Lo esperado: uno 200 y otro 409
 function pedirDoble(p) {
   dobles.add(1);
   const cuerpo = { version: p.version };
   const claves = [crypto.randomUUID(), crypto.randomUUID()];
-  const respuestas = http.batch(claves.map((c) => solicitud('pedir', p.id, cuerpo, c)));
-  const res = respuestas.map((r, i) => completar('pedir', p.id, cuerpo, claves[i], r));
+  const faseAccion = fase();
+  const respuestas = http.batch(claves.map((c) => solicitud('pedir', p.id, cuerpo, c, faseAccion)));
+  const res = respuestas.map((r, i) => completar('pedir', p.id, cuerpo, claves[i], r, faseAccion));
   // Se sigue con el estado más reciente de los dos
   const utiles = res.filter((x) => x.estado);
   if (utiles.length === 0) return res[0];
@@ -199,14 +213,29 @@ function valor(data, metrica, campo) {
   return m ? m.values[campo] : undefined;
 }
 
+// Duración real de la medición, para calcular solicitudes por segundo. La medición
+// empieza en CALENTAMIENTO_S y termina en CALENTAMIENTO_S + DURACION_S, salvo que la
+// corrida se haya cortado antes (calor, Ctrl+C): entonces termina en la última
+// solicitud enviada. Se toma el menor de los dos finales. En una corrida completa
+// la última solicitud cae después del fin nominal y resulta DURACION_S exacto;
+// en una cortada, dividir entre DURACION_S subestimaría las solicitudes por segundo
+function duracionEfectiva(data) {
+  const ultima = valor(data, 'marca_envio_s', 'max');
+  if (ultima === undefined) return 0;
+  return Math.max(0, Math.min(CALENTAMIENTO_S + DURACION_S, ultima) - CALENTAMIENTO_S);
+}
+
 export function handleSummary(data) {
   const med = 'http_req_duration{fase:medicion}';
   const reqs = valor(data, 'http_reqs{fase:medicion}', 'count') ?? 0;
+  const efectiva = duracionEfectiva(data);
+  const porSegundo = efectiva > 0 ? (reqs / efectiva).toFixed(1) : '-';
   const ms = (x) => (x === undefined ? '-' : `${x.toFixed(1)} ms`);
   const lineas = [
     '',
     `Medición: ${DURACION_S} s con ${VUS} VUs (calentamiento de ${CALENTAMIENTO_S} s fuera)`,
-    `  solicitudes: ${reqs} (${(reqs / DURACION_S).toFixed(1)}/s)`,
+    `  duración efectiva: ${efectiva.toFixed(1)} s` + (efectiva < DURACION_S - 1 ? ' (corrida cortada antes de tiempo)' : ''),
+    `  solicitudes: ${reqs} (${porSegundo}/s sobre la duración efectiva)`,
     `  errores: ${((valor(data, 'http_req_failed{fase:medicion}', 'rate') ?? 0) * 100).toFixed(2)} % (409 no cuenta)`,
     `  latencia global: p50 ${ms(valor(data, med, 'med'))}, p95 ${ms(valor(data, med, 'p(95)'))}`,
   ];
@@ -222,6 +251,9 @@ export function handleSummary(data) {
   lineas.push('');
 
   const salida = { stdout: lineas.join('\n') };
-  if (__ENV.RESUMEN) salida[__ENV.RESUMEN] = JSON.stringify(data, null, 2);
+  if (__ENV.RESUMEN) {
+    const extra = { medicion: { duracion_nominal_s: DURACION_S, duracion_efectiva_s: efectiva } };
+    salida[__ENV.RESUMEN] = JSON.stringify({ ...data, ...extra }, null, 2);
+  }
   return salida;
 }

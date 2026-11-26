@@ -29,7 +29,7 @@ spec:
     spec:
       containers:
         - name: procesador
-          image: blackjack-procesador:0.5
+          image: blackjack-procesador:0.8
           imagePullPolicy: Never     # imagen local de Minikube
           ports:
             - containerPort: 8000
@@ -38,11 +38,13 @@ spec:
                 name: blackjack-config
             - secretRef:
                 name: postgres-credenciales
-          # Calibración (estructura, secc. 7): la API (una réplica, 500m) gasta casi
-          # la misma CPU por solicitud que el procesador, así que 3 procesadores
-          # deben sumar bastante menos que 500m o E2 no puede mostrar mejora. Con
-          # 500m y con 150m la API se frenaba antes; con 100m suman ~300m.
-          # Reserva = límite: el pod tiene garantizado justo lo que puede usar
+          # Calibración: la API (una réplica, 500m) gasta casi la misma CPU por
+          # solicitud que el procesador, así que 3 procesadores deben sumar bastante
+          # menos que 500m o el experimento de escalar réplicas no puede mostrar
+          # mejora. Con 500m y con 150m por réplica la API se frenaba antes; con 100m
+          # suman 300m. En CPU, reserva = límite: el pod tiene garantizado justo lo
+          # que puede usar. En memoria no (request 128Mi, límite 256Mi), así que la
+          # clase de QoS (calidad de servicio) del pod es Burstable, no Guaranteed
           resources:
             requests:
               cpu: 100m
@@ -64,10 +66,15 @@ spec:
               port: 8000
             periodSeconds: 10
             failureThreshold: 3
-          # Disponibilidad: revisa la BD
+          # Disponibilidad: revisa la BD. Cada 2 s y no cada 5: tras una caída, la espera
+          # hasta la siguiente sonda se suma al tiempo de recuperación (hasta 5 s de los
+          # 13 s medidos con 1 réplica). Cada sonda hace un SELECT, ~1-2 % de los 100m
           readinessProbe:
             httpGet:
               path: /listo
               port: 8000
-            periodSeconds: 5
-            failureThreshold: 1
+            periodSeconds: 2
+            # 3 fallos seguidos (6 s) para sacar al pod del Service: con 1, una sola sonda
+            # lenta de un procesador saturado lo sacaba aunque siguiera sano. Para volver
+            # basta una sonda buena, así que la recuperación tras una caída no cambia
+            failureThreshold: 3

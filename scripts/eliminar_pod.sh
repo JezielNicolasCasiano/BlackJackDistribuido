@@ -6,6 +6,7 @@
 set -euo pipefail
 source "$(dirname "$0")/comun.sh"
 uso="Uso: eliminar_pod.sh procesador|postgres ordenada|forzada|reinicio [ARCHIVO.csv]"
+LIMITE_RECUPERACION_S=${LIMITE_RECUPERACION_S:-300}   # tope de espera a la recuperación
 objetivo=${1:?$uso}; modo=${2:?$uso}; archivo=${3:-}
 
 case "$objetivo" in
@@ -33,23 +34,27 @@ case "$modo" in
 esac
 msg "Fallo provocado en $objetivo ($modo, $afectados) a las $marca"
 
-if [ "$modo" = reinicio ]; then
-  # Todas las réplicas listas son pods nuevos
-  until [ "$(uids_listos | grep -cvxF -f <(echo "$uids_antes"))" -ge "$replicas" ]; do sleep 0.25; done
-else
-  # Réplicas completas sin contar a la víctima
-  until [ "$(uids_listos | grep -cvxF "$uid_victima")" -ge "$replicas" ]; do sleep 0.25; done
-fi
-segundos=$(python3 -c "print(f'{$(date +%s.%N) - $t0:.2f}')")
+# Todas las réplicas listas son pods nuevos (reinicio), o bien réplicas completas
+# sin contar a la víctima (los demás modos)
+listos_nuevos() {
+  if [ "$modo" = reinicio ]; then
+    [ "$(uids_listos | grep -cvxF -f <(echo "$uids_antes"))" -ge "$replicas" ]
+  else
+    [ "$(uids_listos | grep -cvxF "$uid_victima")" -ge "$replicas" ]
+  fi
+}
+# Con tope de tiempo: si el clúster no se recupera, que el script termine con error
+con_limite "$LIMITE_RECUPERACION_S" listos_nuevos \
+  || { msg "ERROR: $objetivo no recuperó sus réplicas en $LIMITE_RECUPERACION_S s"; exit 1; }
+segundos=$(segundos_desde "$t0")
 
 # En PostgreSQL también se mide cuándo acepta consultas
 seg_bd=""
-if [ "$objetivo" = postgres ]; then esperar_bd; seg_bd=$(python3 -c "print(f'{$(date +%s.%N) - $t0:.2f}')"); fi
+if [ "$objetivo" = postgres ]; then esperar_bd; seg_bd=$(segundos_desde "$t0"); fi
 msg "Réplicas listas otra vez tras $segundos s${seg_bd:+; la BD responde tras $seg_bd s}"
 
 if [ -n "$archivo" ]; then
-  mkdir -p "$(dirname "$archivo")"
-  [ -s "$archivo" ] || echo "marca_fallo,objetivo,modo,pods_afectados,replicas,segundos_hasta_listo,segundos_hasta_bd" > "$archivo"
+  csv_con_encabezado "$archivo" "marca_fallo,objetivo,modo,pods_afectados,replicas,segundos_hasta_listo,segundos_hasta_bd"
   echo "$marca,$objetivo,$modo,$afectados,$replicas,$segundos,$seg_bd" >> "$archivo"
 fi
 echo "$segundos"

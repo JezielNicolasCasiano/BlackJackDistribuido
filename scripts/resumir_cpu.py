@@ -4,17 +4,20 @@ Con las lecturas de cpu_pods.sh al inicio y al final de la medición
 (DIRECTORIO/cpu_contadores.csv), calcula para cada pod la CPU promedio en
 milicores y el porcentaje de periodos en que su límite lo frenó. Escribe
 DIRECTORIO/cpu.csv. Un pod que no estuvo en las dos lecturas (reemplazado por
-un fallo) no aparece.
+un fallo) no aparece. Si falta la lectura final (corrida abortada o interrumpida)
+avisa y termina sin error, sin escribir cpu.csv.
 """
 import csv
 import sys
 from pathlib import Path
 
 directorio = Path(sys.argv[1])
+archivo = directorio / "cpu_contadores.csv"
 lecturas = {}
-with open(directorio / "cpu_contadores.csv", newline="") as f:
-    for fila in csv.DictReader(f):
-        lecturas[(fila["etiqueta"], fila["pod"])] = fila
+if archivo.exists():
+    with open(archivo, newline="") as f:
+        for fila in csv.DictReader(f):
+            lecturas[(fila["etiqueta"], fila["pod"])] = fila
 
 filas = []
 for (etiqueta, pod), ini in sorted(lecturas.items()):
@@ -27,6 +30,13 @@ for (etiqueta, pod), ini in sorted(lecturas.items()):
     # PostgreSQL no tiene límite: no hay periodos que contar
     frenado = 100 * d["nr_throttled"] / d["nr_periods"] if d["nr_periods"] else 0.0
     filas.append([pod, f"{segundos:.1f}", f"{milicores:.0f}", f"{frenado:.1f}"])
+
+if not filas:
+    # Sin pares inicio/fin no hay intervalo que medir: la corrida terminó antes de
+    # la lectura final (aborto por calor o Ctrl+C) o antes de la inicial
+    print("CPU durante la medición: sin datos (falta la lectura inicial o la final; "
+          "¿corrida abortada o interrumpida?)")
+    sys.exit(0)
 
 with open(directorio / "cpu.csv", "w", newline="") as f:
     w = csv.writer(f)

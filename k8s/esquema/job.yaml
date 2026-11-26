@@ -32,6 +32,9 @@ spec:
             - name: PGHOST
               valueFrom:
                 configMapKeyRef: {name: blackjack-config, key: DB_HOST}
+            - name: PGPORT
+              valueFrom:
+                configMapKeyRef: {name: blackjack-config, key: DB_PORT}
             - name: PGUSER
               valueFrom:
                 secretKeyRef: {name: postgres-credenciales, key: POSTGRES_USER}

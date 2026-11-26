@@ -10,6 +10,13 @@ data:
   DB_PORT: "5432"
   POOL_SIZE: "10"              # conexiones por réplica
   PROCESADOR_URL: http://procesador:8000
+  # Cadena de esperas, cada una menor que la de arriba para que el error suela llegar
+  # desde el eslabón que falló: cliente k6 (TIMEOUT 8 s) > API espera al procesador
+  # (5 s) > procesador espera una conexión libre del pool (3 s). La espera en la cola
+  # de hilos del procesador no está acotada, así que aún puede aplicarse una acción
+  # después de un 504; ese caso lo cubre la clave de idempotencia
+  POOL_TIMEOUT_S: "3"          # procesador: espera máxima por una conexión del pool
+  PROCESADOR_TIMEOUT_S: "5"    # API: espera máxima a la respuesta del procesador
   API_KEEPALIVE: "false"       # calibración: con true una de 3 réplicas casi no recibía trabajo
   IDEMPOTENCIA: "on"           # off solo en el experimento de control (scripts/idempotencia.sh)
 ---
