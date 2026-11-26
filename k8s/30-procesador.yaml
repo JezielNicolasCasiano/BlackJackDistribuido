@@ -38,16 +38,17 @@ spec:
                 name: blackjack-config
             - secretRef:
                 name: postgres-credenciales
-          # Calibración (estructura, secc. 7): con 500m, la API (una réplica, 500m)
-          # se saturaba antes que 3 procesadores y E2 no podía mostrar mejora.
-          # Con 150m, tres réplicas caben bajo la API. Reserva = límite: el pod
-          # tiene garantizado justo lo que puede usar
+          # Calibración (estructura, secc. 7): la API (una réplica, 500m) gasta casi
+          # la misma CPU por solicitud que el procesador, así que 3 procesadores
+          # deben sumar bastante menos que 500m o E2 no puede mostrar mejora. Con
+          # 500m y con 150m la API se frenaba antes; con 100m suman ~300m.
+          # Reserva = límite: el pod tiene garantizado justo lo que puede usar
           resources:
             requests:
-              cpu: 150m
+              cpu: 100m
               memory: 128Mi
             limits:
-              cpu: 150m              # sin límite, E2 no es comparable
+              cpu: 100m              # sin límite, E2 no es comparable
               memory: 256Mi
           # Al eliminar el pod, espera 5 s antes de que uvicorn reciba SIGTERM: kube-proxy
           # tarda ~1 s en dejar de mandarle conexiones nuevas, y en ese intervalo el pod

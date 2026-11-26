@@ -40,3 +40,7 @@ esperar_bd
 esperar_pods_listos 300s
 esperar_cadena
 msg "Entorno listo en $(api_url)"
+# El turbo se vuelve a encender con cada reinicio del equipo (estructura, sección 7)
+if [ "$(cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null)" = 0 ]; then
+  msg "AVISO: turbo encendido. Antes de medir: echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo"
+fi
