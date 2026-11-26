@@ -1,0 +1,5 @@
+__pycache__/
+.pytest_cache/
+# Los resultados completos de k6 pesan; se suben los resúmenes (resumen_k6.json, verificacion.json, fallos.csv, recursos.csv)
+resultados/*/*/k6.json.gz
+resultados/*/*/k6.json

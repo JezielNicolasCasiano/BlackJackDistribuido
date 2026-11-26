@@ -1,0 +1,5 @@
+# Solo lo que usan las pruebas de punta a punta y el verificador.
+# (pytest y psycopg ya están en requirements-dev.txt de la raíz; esto es un respaldo)
+pytest>=8
+requests>=2.31
+psycopg[binary]>=3.1
