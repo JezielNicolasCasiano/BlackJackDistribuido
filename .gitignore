@@ -14,3 +14,6 @@ Manual_Blackjack.pdf
 pyproject.toml
 uv.lock
 .pytest_cache/
+
+# Salida de las corridas (se decidirá en la parte 5 si se sube)
+resultados/
