@@ -30,6 +30,10 @@ class NuevaPartida(BaseModel):
     jugador: str = Field(min_length=1, max_length=50)
 
 
+class Accion(BaseModel):
+    version: int = Field(ge=1)
+
+
 def reenviar(metodo, ruta, clave=None, cuerpo=None):
     """Pasa la solicitud al procesador y devuelve su respuesta tal cual."""
     encabezados = {"Idempotency-Key": str(clave)} if clave else {}
@@ -70,3 +74,18 @@ def quien(respuesta: Response):
 @app.post("/partidas")
 def crear_partida(datos: NuevaPartida, clave: Clave):
     return reenviar("POST", "/partidas", clave, datos.model_dump())
+
+
+@app.get("/partidas/{id_partida}")
+def consultar_partida(id_partida: UUID):
+    return reenviar("GET", f"/partidas/{id_partida}")
+
+
+@app.post("/partidas/{id_partida}/pedir")
+def pedir(id_partida: UUID, datos: Accion, clave: Clave):
+    return reenviar("POST", f"/partidas/{id_partida}/pedir", clave, datos.model_dump())
+
+
+@app.post("/partidas/{id_partida}/plantarse")
+def plantarse(id_partida: UUID, datos: Accion, clave: Clave):
+    return reenviar("POST", f"/partidas/{id_partida}/plantarse", clave, datos.model_dump())

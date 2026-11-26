@@ -49,11 +49,20 @@ class NuevaPartida(BaseModel):
     jugador: str = Field(min_length=1, max_length=50)
 
 
+class Accion(BaseModel):
+    version: int = Field(ge=1)       # la versión que vio el jugador al decidir
+
+
 @app.exception_handler(psycopg.OperationalError)
 @app.exception_handler(PoolTimeout)
 def sin_base_de_datos(solicitud: Request, error: Exception):
     """Sin conexión a la BD: 503, para que el cliente reintente con la misma clave."""
     return JSONResponse(status_code=503, content={"error": "sin base de datos", "pod": POD})
+
+
+@app.exception_handler(partidas.NoExiste)
+def no_existe(solicitud: Request, error: partidas.NoExiste):
+    return JSONResponse(status_code=404, content={"error": "la partida no existe"})
 
 
 @app.exception_handler(partidas.ClaveReutilizada)
@@ -89,5 +98,26 @@ def quien():
 @app.post("/partidas")
 def crear_partida(datos: NuevaPartida, clave: Clave, respuesta: Response):
     codigo, cuerpo = partidas.crear_partida(pool, clave, datos.jugador)
+    respuesta.status_code = codigo
+    return cuerpo
+
+
+@app.get("/partidas/{id_partida}")
+def consultar_partida(id_partida: UUID, respuesta: Response):
+    codigo, cuerpo = partidas.consultar_partida(pool, id_partida)
+    respuesta.status_code = codigo
+    return cuerpo
+
+
+@app.post("/partidas/{id_partida}/pedir")
+def pedir(id_partida: UUID, datos: Accion, clave: Clave, respuesta: Response):
+    codigo, cuerpo = partidas.pedir(pool, id_partida, clave, datos.version)
+    respuesta.status_code = codigo
+    return cuerpo
+
+
+@app.post("/partidas/{id_partida}/plantarse")
+def plantarse(id_partida: UUID, datos: Accion, clave: Clave, respuesta: Response):
+    codigo, cuerpo = partidas.plantarse(pool, id_partida, clave, datos.version)
     respuesta.status_code = codigo
     return cuerpo

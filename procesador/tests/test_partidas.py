@@ -9,18 +9,11 @@ import pytest
 if "DB_HOST" not in os.environ:
     pytest.skip("sin base de datos: correr con scripts/probar.sh", allow_module_level=True)
 
-from fastapi.testclient import TestClient  # noqa: E402
 from psycopg_pool import ConnectionPool  # noqa: E402
 
 import main  # noqa: E402
 import partidas  # noqa: E402
 from reglas import crear_mazo, es_blackjack, reparto_inicial  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def cliente():
-    with TestClient(main.app) as c:     # abre el pool (lifespan) una sola vez
-        yield c
 
 
 @pytest.fixture(autouse=True)

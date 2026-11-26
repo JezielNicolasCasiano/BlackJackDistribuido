@@ -8,11 +8,16 @@ import random
 from psycopg import errors
 from psycopg.types.json import Jsonb
 
-from reglas import calcular_resultado, calcular_total, crear_mazo, es_blackjack, reparto_inicial
+from reglas import (calcular_resultado, calcular_total, crear_mazo, es_blackjack, jugar_crupier,
+                    reparto_inicial, se_paso, turno_terminado)
 
 
 class ClaveReutilizada(Exception):
-    """La clave de idempotencia ya se usó para otra operación."""
+    """La clave de idempotencia ya se usó para otra operación u otra partida."""
+
+
+class NoExiste(Exception):
+    """La partida no existe."""
 
 
 def vista(id_partida, estado, version, cartas_jugador, cartas_crupier, resultado):
@@ -33,16 +38,43 @@ def vista(id_partida, estado, version, cartas_jugador, cartas_crupier, resultado
     }
 
 
-def _respuesta_guardada(conexion, clave, operacion):
-    """La respuesta de una acción ya aplicada, o None si la clave es nueva."""
+def _respuesta_guardada(conexion, clave, operacion, id_partida=None):
+    """La respuesta de una acción ya aplicada, o None si la clave es nueva.
+
+    Si la clave existe pero es de otra operación o de otra partida, no es un
+    reintento sino un error del cliente.
+    """
     fila = conexion.execute(
-        "SELECT operacion, respuesta FROM solicitudes WHERE clave = %s", (clave,)
+        "SELECT operacion, partida_id, respuesta FROM solicitudes WHERE clave = %s", (clave,)
     ).fetchone()
     if fila is None:
         return None
     if fila[0] != operacion:
         raise ClaveReutilizada(f"la clave ya se usó para '{fila[0]}'")
-    return fila[1]
+    if id_partida is not None and str(fila[1]) != str(id_partida):
+        raise ClaveReutilizada("la clave ya se usó en otra partida")
+    return fila[2]
+
+
+def _cartas(conexion, id_partida):
+    """Las cartas de una partida en el orden en que salieron, separadas por dueño."""
+    filas = conexion.execute(
+        "SELECT duenio, carta FROM cartas WHERE partida_id = %s ORDER BY orden", (id_partida,)
+    ).fetchall()
+    return ([c for d, c in filas if d == "jugador"], [c for d, c in filas if d == "crupier"])
+
+
+def consultar_partida(pool, id_partida):
+    """El estado actual de una partida. Solo lee: no bloquea ni cambia nada."""
+    with pool.connection() as conexion:
+        fila = conexion.execute(
+            "SELECT estado, version, resultado FROM partidas WHERE id = %s", (id_partida,)
+        ).fetchone()
+        if fila is None:
+            raise NoExiste()
+        jugador, crupier = _cartas(conexion, id_partida)
+    estado, version, resultado = fila
+    return 200, vista(id_partida, estado, version, jugador, crupier, resultado)
 
 
 def crear_partida(pool, clave, jugador, rng=random):
@@ -101,3 +133,95 @@ def crear_partida(pool, clave, jugador, rng=random):
             raise
         with pool.connection() as conexion:
             return 200, _respuesta_guardada(conexion, clave, "crear")
+
+
+def pedir(pool, id_partida, clave, version):
+    return _actuar(pool, id_partida, clave, version, "pedir")
+
+
+def plantarse(pool, id_partida, clave, version):
+    return _actuar(pool, id_partida, clave, version, "plantarse")
+
+
+def _actuar(pool, id_partida, clave, version, operacion):
+    """pedir o plantarse, con los pasos del diseño en una sola transacción.
+
+    Devuelve (código HTTP, cuerpo): 200 si se aplicó o si es un reintento de
+    algo ya aplicado, 409 con el estado actual si la versión no coincide o la
+    partida ya terminó.
+    """
+    try:
+        with pool.connection() as conexion, conexion.transaction():
+            # 1. Bloquear la fila. Otra acción sobre la misma partida espera aquí
+            #    a que esta confirme o se deshaga (el semáforo del primer proyecto)
+            fila = conexion.execute(
+                """SELECT estado, version, mazo, pos_mazo, resultado
+                   FROM partidas WHERE id = %s FOR UPDATE""",
+                (id_partida,),
+            ).fetchone()
+            if fila is None:
+                raise NoExiste()
+            estado, version_actual, mazo, pos_mazo, resultado = fila
+
+            # 2. La clave antes que la versión: un reintento llega con la versión
+            #    vieja, porque el cliente nunca recibió la nueva
+            guardada = _respuesta_guardada(conexion, clave, operacion, id_partida)
+            if guardada is not None:
+                return 200, guardada
+
+            jugador, crupier = _cartas(conexion, id_partida)
+
+            # 3. ¿Lo que vio el jugador sigue siendo cierto? Si no, no se aplica
+            #    nada y se le devuelve el estado real para que vuelva a decidir
+            if estado != "en_juego" or version != version_actual:
+                return 409, vista(id_partida, estado, version_actual, jugador, crupier, resultado)
+
+            # 4. Aplicar. mazo viene como lista de Python (empieza en 0), así que
+            #    la siguiente carta es mazo[pos_mazo]; en SQL sería mazo[pos_mazo + 1]
+            nuevas = []                       # (dueño, carta) en el orden en que salen
+            if operacion == "pedir":
+                jugador.append(mazo[pos_mazo])
+                nuevas.append(("jugador", mazo[pos_mazo]))
+
+            # Pasarse termina la partida sin que juegue el crupier. Plantarse o
+            # llegar a 21 terminan el turno, y entonces juega el crupier
+            if se_paso(jugador):
+                estado = "terminada"
+            elif operacion == "plantarse" or turno_terminado(jugador):
+                siguientes = mazo[pos_mazo + len(nuevas):]
+                for carta in jugar_crupier(crupier, siguientes):
+                    crupier.append(carta)
+                    nuevas.append(("crupier", carta))
+                estado = "terminada"
+            terminada = estado == "terminada"
+            resultado = calcular_resultado(jugador, crupier) if terminada else None
+
+            with conexion.cursor() as cursor:
+                cursor.executemany(
+                    "INSERT INTO cartas (partida_id, orden, duenio, carta) VALUES (%s, %s, %s, %s)",
+                    [(id_partida, pos_mazo + i, duenio, carta)
+                     for i, (duenio, carta) in enumerate(nuevas, start=1)],
+                )
+            conexion.execute(
+                """UPDATE partidas
+                   SET version = version + 1, pos_mazo = %s, estado = %s, resultado = %s,
+                       terminada_en = CASE WHEN %s THEN now() END
+                   WHERE id = %s""",
+                (pos_mazo + len(nuevas), estado, resultado, terminada, id_partida),
+            )
+            cuerpo = vista(id_partida, estado, version_actual + 1, jugador, crupier, resultado)
+            conexion.execute(
+                "INSERT INTO solicitudes (clave, partida_id, operacion, respuesta) VALUES (%s, %s, %s, %s)",
+                (clave, id_partida, operacion, Jsonb(cuerpo)),
+            )
+        # 5. Confirmado (al salir del with). Si el pod muere después de aquí, el
+        #    reintento cae en el paso 2
+        return 200, cuerpo
+
+    except errors.UniqueViolation as error:
+        # Con el bloqueo, dos reintentos de la misma partida no llegan a chocar.
+        # Solo ocurre si la misma clave se usó en otra partida al mismo tiempo
+        if error.diag.constraint_name != "r2_clave_unica":
+            raise
+        with pool.connection() as conexion:
+            return 200, _respuesta_guardada(conexion, clave, operacion, id_partida)
