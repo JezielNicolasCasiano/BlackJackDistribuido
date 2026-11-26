@@ -28,6 +28,8 @@ docker exec -i "$nombre" psql -q -h 127.0.0.1 -U blackjack -d blackjack < "$RAIZ
 msg "PostgreSQL de pruebas listo en el puerto $puerto"
 
 cd "$RAIZ"
+# REQUIERE_BD=1: aquí la BD existe, así que una prueba que no la encuentre
+# falla en lugar de saltarse en silencio. -rs lista cualquier otro salto
 DB_HOST=127.0.0.1 DB_PORT=$puerto POSTGRES_DB=blackjack POSTGRES_USER=blackjack \
-POSTGRES_PASSWORD=pruebas POOL_SIZE=10 \
-  .venv/bin/python -m pytest "$@"
+POSTGRES_PASSWORD=pruebas POOL_SIZE=10 REQUIERE_BD=1 \
+  .venv/bin/python -m pytest -rs "$@"

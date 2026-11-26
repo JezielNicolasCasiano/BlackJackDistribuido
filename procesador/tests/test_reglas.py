@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from reglas import (EMPATE, GANADA, PERDIDA, calcular_resultado, calcular_total, crear_mazo,
-                    es_blackjack, jugar_crupier, puntos, reparto_inicial, se_paso, turno_terminado)
+from reglas import (CRUPIER, EMPATE, EN_JUEGO, GANADA, JUGADOR, PEDIR, PERDIDA, PLANTARSE,
+                    TERMINADA, aplicar, calcular_resultado, calcular_total, crear_mazo,
+                    es_blackjack, jugar_crupier, puntos, repartir, reparto_inicial, se_paso,
+                    turno_terminado)
 
 FORMATO = re.compile(r"^(A|[2-9]|10|J|Q|K)[CDTP]$")   # el mismo de r4_carta_valida
 
@@ -89,6 +91,70 @@ def test_jugar_crupier(crupier, siguientes, nuevas):
     assert jugar_crupier(crupier, siguientes) == nuevas
 
 
+# ---------------- repartir y aplicar ----------------
+
+def test_repartir_sin_blackjack_queda_en_juego():
+    j = repartir(["2C", "10D", "3C", "7D", "4C"])
+    assert j.nuevas == reparto_inicial(["2C", "10D", "3C", "7D"])
+    assert (j.jugador, j.crupier) == (["2C", "3C"], ["10D", "7D"])
+    assert (j.estado, j.resultado, j.terminada) == (EN_JUEGO, None, False)
+
+
+@pytest.mark.parametrize("mazo, resultado", [
+    (["AC", "10D", "KC", "6D", "5P"], GANADA),     # el crupier tenía 16 y no pide
+    (["AC", "AD", "KC", "QD"], EMPATE),            # los dos con blackjack
+])
+def test_repartir_con_blackjack_termina_sin_que_juegue_el_crupier(mazo, resultado):
+    j = repartir(mazo)
+    assert (j.estado, j.resultado, j.terminada) == (TERMINADA, resultado, True)
+    assert len(j.nuevas) == 4 and len(j.crupier) == 2
+
+
+# Las cuatro del reparto y después las que quedan en el mazo
+REPARTO = ["10C", "10D", "9C", "6D"]
+
+
+@pytest.mark.parametrize("operacion, siguientes, nuevas, estado, resultado", [
+    # Jugador 19 pide un 2 = 21: termina su turno y el crupier (16) pide un 3 = 19
+    (PEDIR, ["2C", "3D"], [(JUGADOR, "2C"), (CRUPIER, "3D")], TERMINADA, GANADA),
+    # Pide un 5 = 24: se pasa y el crupier no juega aunque tenga 16
+    (PEDIR, ["5C", "3D"], [(JUGADOR, "5C")], TERMINADA, PERDIDA),
+    # Plantarse con 19: el crupier pide un 5 = 21
+    (PLANTARSE, ["5C", "3D"], [(CRUPIER, "5C")], TERMINADA, PERDIDA),
+])
+def test_aplicar(operacion, siguientes, nuevas, estado, resultado):
+    j = aplicar(operacion, ["10C", "9C"], ["10D", "6D"], REPARTO + siguientes, 4)
+    assert j.nuevas == nuevas
+    assert (j.estado, j.resultado) == (estado, resultado)
+    assert j.jugador == ["10C", "9C"] + [c for d, c in nuevas if d == JUGADOR]
+    assert j.crupier == ["10D", "6D"] + [c for d, c in nuevas if d == CRUPIER]
+
+
+def test_aplicar_pedir_sin_terminar_sigue_en_juego():
+    j = aplicar(PEDIR, ["2C", "3C"], ["10D", "7D"], ["2C", "10D", "3C", "7D", "4C", "5C"], 4)
+    assert (j.nuevas, j.estado, j.resultado) == ([(JUGADOR, "4C")], EN_JUEGO, None)
+
+
+def test_aplicar_toma_la_carta_de_pos_mazo():
+    """pos_mazo cuenta las cartas ya repartidas: la siguiente es mazo[pos_mazo]."""
+    mazo = ["2C", "10D", "3C", "7D", "4C", "5C", "6C"]
+    j = aplicar(PEDIR, ["2C", "3C", "4C"], ["10D", "7D"], mazo, 5)
+    assert j.nuevas == [(JUGADOR, "5C")]
+
+
+def test_plantarse_con_17_o_mas_no_saca_cartas():
+    j = aplicar(PLANTARSE, ["10C", "8C"], ["10D", "8D"], ["10C", "10D", "8C", "8D", "2C"], 4)
+    assert (j.nuevas, j.estado, j.resultado) == ([], TERMINADA, EMPATE)
+
+
+def test_aplicar_no_modifica_lo_que_recibe():
+    jugador, crupier = ["10C", "9C"], ["10D", "6D"]
+    mazo = REPARTO + ["2C", "3D"]
+    copia = (list(jugador), list(crupier), list(mazo))
+    aplicar(PEDIR, jugador, crupier, mazo, 4)
+    assert (jugador, crupier, mazo) == copia
+
+
 # ---------------- Resultado ----------------
 
 @pytest.mark.parametrize("jugador, crupier, resultado", [
@@ -109,11 +175,21 @@ def test_calcular_resultado(jugador, crupier, resultado):
 
 @pytest.fixture(scope="module")
 def primer_proyecto():
-    """Importa baraja.py y crupier.py tal como se entregaron."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "blackjack"))
-    import baraja
-    import crupier
-    return baraja, crupier
+    """Importa baraja.py y crupier.py tal como se entregaron.
+
+    blackjack/ tiene su propio main.py: la carpeta se agrega a sys.path solo
+    mientras corren estas pruebas y al final se olvidan sus módulos, para que
+    un import main posterior no traiga el del primer proyecto.
+    """
+    carpeta = Path(__file__).resolve().parents[2] / "blackjack"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.syspath_prepend(str(carpeta))
+        import baraja
+        import crupier
+        yield baraja, crupier
+    for nombre, modulo in list(sys.modules.items()):
+        if Path(getattr(modulo, "__file__", None) or "/").parent == carpeta:
+            del sys.modules[nombre]
 
 
 def a_objeto(baraja, carta):

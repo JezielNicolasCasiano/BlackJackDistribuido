@@ -18,4 +18,5 @@ USER app
 
 EXPOSE 8000
 # Forma exec para que uvicorn reciba SIGTERM
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Sin registro de acceso: main.py escribe uno propio que incluye la clave
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
